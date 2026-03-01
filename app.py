@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from src import config
-from src.data import fetch_ticker_data
+from src.data import fetch_ticker_data, load_universe_csv
 from src.decision_trace import DecisionTrace
 from src.ratings import screener_snapshot, technical_ratings
 from src.signals import (
@@ -29,7 +29,6 @@ from src.signals import (
 from src.ui_helpers import (
     clean_display_df,
     lifecycle_score_chart,
-    pick_universe_df,
     prepare_lifecycle_frame,
 )
 
@@ -48,6 +47,41 @@ WATCHLIST_EXAMPLE = EXAMPLES_DIR / "xfra_swing_trading_universe.csv"
 DATAFRAME_HAS_SELECTION = "on_select" in inspect.signature(st.dataframe).parameters
 
 
+def _trigger_rerun() -> None:
+    rerun_fn = getattr(st, "rerun", None)
+    if callable(rerun_fn):
+        rerun_fn()
+        return
+    st.experimental_rerun()
+
+
+THRESHOLD_PRESETS: dict[str, tuple[float, float]] = {
+    "Conservative": (-0.30, 0.45),
+    "Balanced": (-0.20, 0.30),
+    "Aggressive": (-0.10, 0.15),
+}
+
+POSITIVE_WORDS = {
+    "buy",
+    "strong buy",
+    "strong",
+    "rising",
+    "strengthening",
+    "ok",
+    "yes",
+}
+NEGATIVE_WORDS = {
+    "sell",
+    "strong sell",
+    "broken",
+    "falling",
+    "weakening",
+    "breakdown",
+    "no",
+}
+NEUTRAL_WORDS = {"hold", "watch", "weak", "neutral", "no signal", "n/a"}
+
+
 def _build_data_cache(universe_df: pd.DataFrame) -> dict[str, object]:
     all_tickers = set(universe_df["SignalTicker"].dropna().astype(str)) | set(
         universe_df["Benchmark"].dropna().astype(str)
@@ -56,10 +90,88 @@ def _build_data_cache(universe_df: pd.DataFrame) -> dict[str, object]:
     progress = st.progress(0.0, text="Downloading market data...")
     total = max(1, len(all_tickers))
     for i, ticker in enumerate(sorted(all_tickers), start=1):
-        cache[ticker] = fetch_ticker_data(ticker)
+        cache[ticker] = _cached_fetch_ticker_data(ticker)
         progress.progress(i / total, text=f"Downloaded {i}/{total}: {ticker}")
     progress.empty()
     return cache
+
+
+@st.cache_data(ttl=config.DOWNLOAD_TTL_SECONDS, show_spinner=False)
+def _cached_fetch_ticker_data(ticker: str):
+    return fetch_ticker_data(ticker)
+
+
+def pick_universe_df(
+    title: str, example_path: Path, key_prefix: str
+) -> tuple[pd.DataFrame | None, str | None]:
+    st.subheader(title)
+    source = st.radio(
+        "Source",
+        ["Use example CSV", "Upload CSV"],
+        horizontal=True,
+        key=f"{key_prefix}_source",
+    )
+
+    try:
+        if source == "Use example CSV":
+            df = load_universe_csv(example_path)
+            st.caption(f"Using example file: `{example_path}`")
+            return df, None
+
+        uploaded = st.file_uploader(
+            "Upload CSV",
+            type=["csv"],
+            key=f"{key_prefix}_upload",
+            help="CSV schema: Name, Region, SignalTicker (+ optional TradeTicker_DE, Benchmark)",
+        )
+        if uploaded is None:
+            return None, "Upload a CSV to continue."
+
+        df = load_universe_csv(uploaded)
+        return df, None
+    except Exception as exc:  # pragma: no cover - UI display branch
+        return None, str(exc)
+
+
+def _tone_for_text(value: object) -> str:
+    if isinstance(value, bool):
+        return "positive" if value else "negative"
+
+    text = str(value).strip().lower()
+    if text in POSITIVE_WORDS:
+        return "positive"
+    if text in NEGATIVE_WORDS:
+        return "negative"
+    if text in NEUTRAL_WORDS:
+        return "neutral"
+    return "neutral"
+
+
+def _badge_text(value: object) -> str:
+    if pd.isna(value):
+        return "⚪ n/a"
+    tone = _tone_for_text(value)
+    marker = {"positive": "🟢", "negative": "🔴", "neutral": "🟡"}.get(tone, "⚪")
+    return f"{marker} {value}"
+
+
+def _apply_badges(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    out = df.copy()
+    for col in columns:
+        if col in out.columns:
+            out[col] = out[col].apply(_badge_text)
+    return out
+
+
+def _render_threshold_presets(state_key: str, default_pair: tuple[float, float]) -> None:
+    cols = st.columns(3)
+    for col, label in zip(cols, THRESHOLD_PRESETS.keys()):
+        with col:
+            if st.button(label, key=f"{state_key}_preset_{label.lower()}"):
+                st.session_state[state_key] = THRESHOLD_PRESETS[label]
+                _trigger_rerun()
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default_pair
 
 
 def _date_debug_info(df: pd.DataFrame, label: str) -> dict[str, object]:
@@ -97,7 +209,7 @@ def _render_debug_panel(
 
 
 def _coerce_threshold_pair(value: object, default: tuple[float, float]) -> tuple[float, float]:
-    if isinstance(value, (tuple, list)) and len(value) == 2:
+    if isinstance(value, tuple | list) and len(value) == 2:
         try:
             return float(value[0]), float(value[1])
         except (TypeError, ValueError):
@@ -244,11 +356,12 @@ def render_portfolio_tab() -> None:
     out = sort_portfolio_for_risk(out)
 
     st.subheader("Decision Thresholds")
+    _render_threshold_presets("portfolio_thresholds", (-0.25, 0.35))
     sell_threshold, buy_threshold = st.slider(
         "Health Score thresholds (Sell / Buy)",
         min_value=-1.0,
         max_value=1.0,
-        value=(-0.25, 0.35),
+        value=_coerce_threshold_pair(st.session_state.get("portfolio_thresholds"), (-0.25, 0.35)),
         step=0.05,
         key="portfolio_thresholds",
         help="Decision rule: score <= sell threshold => Sell, score >= buy threshold => Buy, otherwise Hold.",
@@ -277,9 +390,13 @@ def render_portfolio_tab() -> None:
         "Decision",
         "Status",
     ]
+    portfolio_display = _apply_badges(
+        out[display_cols],
+        columns=["Decision", "1W Alignment", "1W RS", "1W Momentum State", "Risk Flag"],
+    )
     _render_selectable_stock_table(
         source_df=out,
-        display_df=out[display_cols],
+        display_df=portfolio_display,
         table_key="portfolio_main_table",
         source_label="Portfolio",
         fallback_label="Select portfolio stock for Stock Details",
@@ -365,21 +482,23 @@ def render_portfolio_tab() -> None:
     p_recent = lifecycle.tail(26).copy()
     p_recent.insert(0, "Week", p_recent.index)
     p_recent = p_recent.reset_index(drop=True)
-    st.dataframe(
-        clean_display_df(
-            p_recent[
-                [
-                    "Week",
-                    "Health Score",
-                    "Decision",
-                    "Risk Flag",
-                    "1M Regime",
-                    "1W Alignment",
-                    "1W RS",
-                    "1W Momentum State",
-                ]
+    p_recent_display = _apply_badges(
+        p_recent[
+            [
+                "Week",
+                "Health Score",
+                "Decision",
+                "Risk Flag",
+                "1M Regime",
+                "1W Alignment",
+                "1W RS",
+                "1W Momentum State",
             ]
-        ),
+        ],
+        columns=["Decision", "Risk Flag", "1W Alignment", "1W RS", "1W Momentum State"],
+    )
+    st.dataframe(
+        clean_display_df(p_recent_display),
         use_container_width=True,
         hide_index=True,
     )
@@ -425,11 +544,12 @@ def render_swing_tab() -> None:
     )
 
     st.subheader("1) Swing Screener")
+    _render_threshold_presets("swing_thresholds", (-0.20, 0.30))
     sell_threshold, buy_threshold = st.slider(
         "Production Score thresholds (Sell / Buy)",
         min_value=-1.0,
         max_value=1.0,
-        value=(-0.20, 0.30),
+        value=_coerce_threshold_pair(st.session_state.get("swing_thresholds"), (-0.20, 0.30)),
         step=0.05,
         key="swing_thresholds",
         help=(
@@ -473,9 +593,10 @@ def render_swing_tab() -> None:
                 "ProductionScore",
                 "Status",
             ]
+            action_display = _apply_badges(qualified[action_cols], columns=["Decision"])
             _render_selectable_stock_table(
                 source_df=qualified,
-                display_df=qualified[action_cols],
+                display_df=action_display,
                 table_key="swing_action_table",
                 source_label="Swing",
                 fallback_label="Select swing stock for Stock Details",
@@ -514,6 +635,7 @@ def render_swing_tab() -> None:
             base = swing_lookup.get(ticker, {})
 
             row = {
+                "Symbol": meta.get("TradeTicker_DE", "") or ticker,
                 "Name": meta["Name"],
                 "Region": meta["Region"],
                 "SignalTicker": ticker,
@@ -565,33 +687,59 @@ def render_swing_tab() -> None:
                 ascending=[False, False],
                 na_position="last",
             ).reset_index(drop=True)
+            if "Production Score" in screener_df.columns:
+                screener_df["Decision"] = screener_df["Production Score"].apply(
+                    lambda s: (
+                        decision_from_production_score(float(s), buy_threshold, sell_threshold)
+                        if pd.notna(s)
+                        else "Hold"
+                    )
+                )
             if "selected_stock" not in st.session_state:
                 _store_ranked_context(screener_df, "Swing")
                 _set_selected_stock(screener_df.iloc[0], "Swing")
             screener_cols = [
+                "Symbol",
                 "Name",
-                "Region",
-                "SignalTicker",
-                "TradeTicker_DE",
-                "Benchmark",
-                "Qualified (Weekly)",
                 "Summary Rating",
                 "MA Rating",
                 "Osc Rating",
-                "Production Score",
-                "SetupType",
-                "Price",
                 "RSI(14)",
                 "Momentum(10)",
                 "AO",
                 "CCI(20)",
                 "Stoch %K",
                 "Stoch %D",
+                "SetupType",
+                "Qualified (Weekly)",
+                "Decision",
+                "Production Score",
+                "Price",
+                "SignalTicker",
                 "Status",
             ]
+            screener_display = screener_df[screener_cols].rename(
+                columns={
+                    "Summary Rating": "Tech Rating",
+                    "SetupType": "Pattern",
+                }
+            )
+            screener_display["Qualified (Weekly)"] = screener_display["Qualified (Weekly)"].apply(
+                lambda v: "Yes" if bool(v) else "No"
+            )
+            screener_display = _apply_badges(
+                screener_display,
+                columns=[
+                    "Tech Rating",
+                    "MA Rating",
+                    "Osc Rating",
+                    "Decision",
+                    "Qualified (Weekly)",
+                ],
+            )
             _render_selectable_stock_table(
                 source_df=screener_df,
-                display_df=screener_df[screener_cols],
+                display_df=screener_display,
                 table_key="swing_screener_table",
                 source_label="Swing",
                 fallback_label="Select screener stock for Stock Details",
@@ -716,7 +864,7 @@ def render_stock_details_tab() -> None:
             _set_selected_stock(
                 row, str(st.session_state.get("selected_ranked_source", selected.get("Source", "")))
             )
-            st.rerun()
+            _trigger_rerun()
 
     signal_ticker = str(selected.get("SignalTicker", "")).strip()
     benchmark_ticker = str(selected.get("Benchmark", "")).strip()
@@ -747,11 +895,14 @@ def render_stock_details_tab() -> None:
 
     st.markdown("### Decision Card")
     s_default = _coerce_threshold_pair(st.session_state.get("swing_thresholds"), (-0.20, 0.30))
+    _render_threshold_presets("stock_details_swing_thresholds", s_default)
     s_sell, s_buy = st.slider(
         "Swing production thresholds (Sell / Buy)",
         min_value=-1.0,
         max_value=1.0,
-        value=s_default,
+        value=_coerce_threshold_pair(
+            st.session_state.get("stock_details_swing_thresholds"), s_default
+        ),
         step=0.05,
         key="stock_details_swing_thresholds",
     )
@@ -781,6 +932,16 @@ def render_stock_details_tab() -> None:
     dc5.metric("Risk Flag", str(trace.risk_flag))
     dc6.metric("Thresholds", f"Sell {s_sell:.2f} / Buy {s_buy:.2f}")
     st.caption(f"Risk reason: {trace.risk_reason}")
+    st.markdown(
+        " ".join(
+            [
+                _badge_text(trace.decision),
+                _badge_text("Yes" if trace.qualified else "No"),
+                _badge_text(trace.setup_type),
+                _badge_text(trace.risk_flag),
+            ]
+        )
+    )
 
     st.markdown("### Technical Ratings")
     ratings = technical_ratings(stock.daily)
@@ -809,12 +970,18 @@ def render_stock_details_tab() -> None:
         weekly_rules_df = pd.DataFrame(
             [{"Rule": r.name, "Pass": r.passed, "Value": r.value} for r in trace.rules]
         )
+        weekly_rules_df["Pass"] = weekly_rules_df["Pass"].apply(
+            lambda v: "Yes" if bool(v) else "No"
+        )
+        weekly_rules_df = _apply_badges(weekly_rules_df, columns=["Pass"])
         st.dataframe(clean_display_df(weekly_rules_df), use_container_width=True, hide_index=True)
     with why_right:
         st.caption("Daily component signals")
         components_df = pd.DataFrame(
             [{"Component": c.name, "Signal": c.signal, "Value": c.value} for c in trace.components]
         )
+        components_df["Signal"] = components_df["Signal"].map({1: "Buy", 0: "Neutral", -1: "Sell"})
+        components_df = _apply_badges(components_df, columns=["Signal"])
         st.dataframe(clean_display_df(components_df), use_container_width=True, hide_index=True)
 
     st.markdown("### Swing Lifecycle & Technicals")
@@ -873,28 +1040,32 @@ def render_stock_details_tab() -> None:
         s_recent = swing_lifecycle.tail(26).copy()
         s_recent.insert(0, "Week", s_recent.index)
         s_recent = s_recent.reset_index(drop=True)
-        st.dataframe(
-            clean_display_df(
-                s_recent[
-                    [
-                        "Week",
-                        "Production Score",
-                        "Decision",
-                        "Qualified",
-                        "Rule_Alignment",
-                        "Rule_Slope",
-                        "Rule_RS",
-                        "SetupType",
-                        "RSI14_State",
-                        "RSI_Accel",
-                        "MACD_Hist_Sign",
-                        "MACD_Hist_Accel",
-                        "Price_vs_EMA20",
-                        "Volume_Confirm",
-                        "Volatility_Expansion",
-                    ]
+        s_recent_display = _apply_badges(
+            s_recent[
+                [
+                    "Week",
+                    "Production Score",
+                    "Decision",
+                    "Qualified",
+                    "Rule_Alignment",
+                    "Rule_Slope",
+                    "Rule_RS",
+                    "SetupType",
+                    "RSI14_State",
+                    "RSI_Accel",
+                    "MACD_Hist_Sign",
+                    "MACD_Hist_Accel",
+                    "Price_vs_EMA20",
+                    "Volume_Confirm",
+                    "Volatility_Expansion",
                 ]
+            ].assign(
+                Qualified=lambda d: d["Qualified"].apply(lambda x: "Yes" if bool(x) else "No"),
             ),
+            columns=["Decision", "Qualified"],
+        )
+        st.dataframe(
+            clean_display_df(s_recent_display),
             use_container_width=True,
             hide_index=True,
         )

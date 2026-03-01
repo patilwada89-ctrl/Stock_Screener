@@ -11,20 +11,6 @@ import pandas as pd
 
 from src import config
 
-try:
-    import streamlit as st
-except Exception:  # pragma: no cover - enables unit tests without streamlit installed
-
-    class _DummyStreamlit:
-        @staticmethod
-        def cache_data(*_args, **_kwargs):
-            def decorator(func):
-                return func
-
-            return decorator
-
-    st = _DummyStreamlit()
-
 
 @dataclass
 class TickerData:
@@ -113,7 +99,6 @@ def resolve_benchmark(row: pd.Series) -> str:
     return config.REGION_TO_BENCHMARK.get(region, config.US_BENCHMARK)
 
 
-@st.cache_data(ttl=config.DOWNLOAD_TTL_SECONDS, show_spinner=False)
 def download_history(ticker: str) -> pd.DataFrame:
     try:
         import yfinance as yf
