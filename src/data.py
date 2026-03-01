@@ -171,7 +171,7 @@ def to_monthly(df_daily: pd.DataFrame) -> pd.DataFrame:
     if df_daily.empty:
         return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
-    monthly = df_daily.resample("M").agg(
+    monthly = df_daily.resample(pd.offsets.MonthEnd()).agg(
         {
             "Open": "first",
             "High": "max",

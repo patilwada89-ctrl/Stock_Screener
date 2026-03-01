@@ -44,7 +44,71 @@ EXAMPLES_DIR = BASE_DIR / "examples"
 PORTFOLIO_EXAMPLE = EXAMPLES_DIR / "portfolio.csv"
 WATCHLIST_EXAMPLE = EXAMPLES_DIR / "xfra_swing_trading_universe.csv"
 
-DATAFRAME_HAS_SELECTION = "on_select" in inspect.signature(st.dataframe).parameters
+DATAFRAME_PARAMS = set(inspect.signature(st.dataframe).parameters)
+DATAFRAME_HAS_SELECTION = "on_select" in DATAFRAME_PARAMS
+DATA_EDITOR_FUNC = getattr(st, "data_editor", None) or getattr(st, "experimental_data_editor", None)
+DATA_EDITOR_PARAMS = (
+    set(inspect.signature(DATA_EDITOR_FUNC).parameters) if callable(DATA_EDITOR_FUNC) else set()
+)
+DATA_EDITOR_AVAILABLE = callable(DATA_EDITOR_FUNC)
+
+
+def _streamlit_cache_data(ttl: int, show_spinner: bool = False):
+    """Compatibility wrapper for Streamlit cache APIs across versions."""
+    cache_data = getattr(st, "cache_data", None)
+    if callable(cache_data):
+        return cache_data(ttl=ttl, show_spinner=show_spinner)
+
+    experimental_memo = getattr(st, "experimental_memo", None)
+    if callable(experimental_memo):
+        return experimental_memo(ttl=ttl, show_spinner=show_spinner)
+
+    cache = getattr(st, "cache", None)
+    if callable(cache):
+        return cache(ttl=ttl, show_spinner=show_spinner)
+
+    def _decorator(func):
+        return func
+
+    return _decorator
+
+
+def _render_dataframe(
+    df: pd.DataFrame,
+    *,
+    key: str | None = None,
+    selectable: bool = False,
+):
+    kwargs: dict[str, object] = {}
+    if "use_container_width" in DATAFRAME_PARAMS:
+        kwargs["use_container_width"] = True
+    if "hide_index" in DATAFRAME_PARAMS:
+        kwargs["hide_index"] = True
+    if key is not None and "key" in DATAFRAME_PARAMS:
+        kwargs["key"] = key
+    if selectable and "on_select" in DATAFRAME_PARAMS:
+        kwargs["on_select"] = "rerun"
+    if selectable and "selection_mode" in DATAFRAME_PARAMS:
+        kwargs["selection_mode"] = "single-row"
+    cleaned = clean_display_df(df)
+    try:
+        return st.dataframe(cleaned, **kwargs)
+    except Exception as exc:
+        # Older Streamlit versions can fail Arrow conversion on object columns
+        # containing mixed bool/float/str types. Fallback to text for those columns.
+        message = str(exc)
+        if "Conversion failed for column" not in message:
+            raise
+        fallback = cleaned.copy()
+        for col in fallback.columns:
+            series = fallback[col]
+            if series.dtype == "object":
+                non_null = series.dropna()
+                if non_null.empty:
+                    continue
+                if non_null.map(lambda v: type(v).__name__).nunique() > 1:
+                    fallback[col] = series.map(lambda v: "" if pd.isna(v) else str(v))
+        return st.dataframe(fallback, **kwargs)
 
 
 def _trigger_rerun() -> None:
@@ -87,16 +151,20 @@ def _build_data_cache(universe_df: pd.DataFrame) -> dict[str, object]:
         universe_df["Benchmark"].dropna().astype(str)
     )
     cache: dict[str, object] = {}
-    progress = st.progress(0.0, text="Downloading market data...")
+    status = st.empty()
+    status.text("Downloading market data...")
+    progress = st.progress(0.0)
     total = max(1, len(all_tickers))
     for i, ticker in enumerate(sorted(all_tickers), start=1):
         cache[ticker] = _cached_fetch_ticker_data(ticker)
-        progress.progress(i / total, text=f"Downloaded {i}/{total}: {ticker}")
+        progress.progress(i / total)
+        status.text(f"Downloaded {i}/{total}: {ticker}")
     progress.empty()
+    status.empty()
     return cache
 
 
-@st.cache_data(ttl=config.DOWNLOAD_TTL_SECONDS, show_spinner=False)
+@_streamlit_cache_data(ttl=config.DOWNLOAD_TTL_SECONDS, show_spinner=False)
 def _cached_fetch_ticker_data(ticker: str):
     return fetch_ticker_data(ticker)
 
@@ -209,7 +277,7 @@ def _render_debug_panel(
 
 
 def _coerce_threshold_pair(value: object, default: tuple[float, float]) -> tuple[float, float]:
-    if isinstance(value, tuple | list) and len(value) == 2:
+    if isinstance(value, (tuple, list)) and len(value) == 2:  # noqa: UP038 (py39 runtime)
         try:
             return float(value[0]), float(value[1])
         except (TypeError, ValueError):
@@ -267,7 +335,6 @@ def _render_selectable_stock_table(
     display_df: pd.DataFrame,
     table_key: str,
     source_label: str,
-    fallback_label: str,
 ) -> None:
     if source_df.empty:
         st.info("No rows to display.")
@@ -276,15 +343,56 @@ def _render_selectable_stock_table(
     source_df = source_df.reset_index(drop=True)
     display_df = display_df.reset_index(drop=True)
 
+    if DATA_EDITOR_AVAILABLE:
+        selected_from_state = st.session_state.get("selected_stock", {})
+        selected_ticker = ""
+        if (
+            isinstance(selected_from_state, dict)
+            and selected_from_state.get("Source") == source_label
+        ):
+            selected_ticker = str(selected_from_state.get("SignalTicker", "")).strip()
+
+        editor_df = display_df.copy()
+        select_col = [False] * len(editor_df)
+        for i, row in source_df.iterrows():
+            ticker = str(row.get("SignalTicker", "")).strip()
+            if ticker and ticker == selected_ticker:
+                select_col[i] = True
+        editor_df.insert(0, "Select", select_col)
+
+        kwargs: dict[str, object] = {}
+        if "key" in DATA_EDITOR_PARAMS:
+            kwargs["key"] = f"{table_key}_editor"
+        if "use_container_width" in DATA_EDITOR_PARAMS:
+            kwargs["use_container_width"] = True
+        if "hide_index" in DATA_EDITOR_PARAMS:
+            kwargs["hide_index"] = False
+        if "disabled" in DATA_EDITOR_PARAMS:
+            kwargs["disabled"] = [c for c in editor_df.columns if c != "Select"]
+        if "column_config" in DATA_EDITOR_PARAMS:
+            checkbox_col = getattr(st.column_config, "CheckboxColumn", None)
+            if checkbox_col is not None:
+                kwargs["column_config"] = {"Select": checkbox_col("Select")}
+
+        edited = DATA_EDITOR_FUNC(editor_df, **kwargs)
+        if not isinstance(edited, pd.DataFrame) or "Select" not in edited.columns:
+            return
+
+        checked_rows = edited.index[edited["Select"] == True].tolist()  # noqa: E712
+        selected_row = checked_rows[-1] if checked_rows else None
+        last_row_key = f"{table_key}_last_selected_row"
+        previous_row = st.session_state.get(last_row_key)
+
+        if selected_row != previous_row:
+            st.session_state[last_row_key] = selected_row
+            if isinstance(selected_row, int) and 0 <= selected_row < len(source_df):
+                _store_ranked_context(source_df, source_label)
+                _set_selected_stock(source_df.iloc[selected_row], source_label)
+                _trigger_rerun()
+        return
+
     if DATAFRAME_HAS_SELECTION:
-        event = st.dataframe(
-            clean_display_df(display_df),
-            use_container_width=True,
-            hide_index=True,
-            key=table_key,
-            on_select="rerun",
-            selection_mode="single-row",
-        )
+        event = _render_dataframe(display_df, key=table_key, selectable=True)
 
         selected_rows = []
         if hasattr(event, "selection") and hasattr(event.selection, "rows"):
@@ -304,22 +412,33 @@ def _render_selectable_stock_table(
         st.caption("Click a row to open it in the Stock Details tab.")
         return
 
-    st.dataframe(clean_display_df(display_df), use_container_width=True, hide_index=True)
-    options = source_df["SignalTicker"].astype(str).tolist()
-    names = source_df.set_index("SignalTicker")["Name"].astype(str).to_dict()
-    selected = st.selectbox(
-        fallback_label,
-        options=options,
-        format_func=lambda t: f"{t} - {names.get(t, '')}".strip(" -"),
-        key=f"{table_key}_fallback",
-    )
-    fallback_last_key = f"{table_key}_fallback_last_selected"
-    previous_selected = st.session_state.get(fallback_last_key)
-    if selected and selected != previous_selected:
-        st.session_state[fallback_last_key] = selected
-        picked = source_df[source_df["SignalTicker"] == selected].iloc[0]
-        _store_ranked_context(source_df, source_label)
-        _set_selected_stock(picked, source_label)
+    left_col, right_col = st.columns([5, 2])
+    with left_col:
+        _render_dataframe(display_df, key=table_key)
+    with right_col:
+        st.caption("Select stock for Stock Details")
+        selected_from_state = st.session_state.get("selected_stock", {})
+        selected_ticker = ""
+        if (
+            isinstance(selected_from_state, dict)
+            and selected_from_state.get("Source") == source_label
+        ):
+            selected_ticker = str(selected_from_state.get("SignalTicker", "")).strip()
+        for i, row in source_df.iterrows():
+            ticker = str(row.get("SignalTicker", "")).strip()
+            name = str(row.get("Name", "")).strip()
+            checkbox_key = f"{table_key}_chk_{i}"
+            should_be_checked = bool(ticker) and ticker == selected_ticker
+            if st.session_state.get(checkbox_key) != should_be_checked:
+                st.session_state[checkbox_key] = should_be_checked
+            label = f"{ticker} - {name}".strip(" -") if ticker or name else f"Row {i + 1}"
+            checked = st.checkbox(label, key=checkbox_key)
+            if checked and ticker and ticker != selected_ticker:
+                for j in source_df.index:
+                    st.session_state[f"{table_key}_chk_{j}"] = j == i
+                _store_ranked_context(source_df, source_label)
+                _set_selected_stock(row, source_label)
+                _trigger_rerun()
 
 
 def render_portfolio_tab() -> None:
@@ -399,7 +518,6 @@ def render_portfolio_tab() -> None:
         display_df=portfolio_display,
         table_key="portfolio_main_table",
         source_label="Portfolio",
-        fallback_label="Select portfolio stock for Stock Details",
     )
 
     st.subheader("Portfolio Lifecycle")
@@ -409,27 +527,23 @@ def render_portfolio_tab() -> None:
         return
 
     selected_from_state = st.session_state.get("selected_stock", {})
-    default_ticker = ""
+    selected_ticker = ""
     if (
         isinstance(selected_from_state, dict)
         and selected_from_state.get("Source") == "Portfolio"
         and selected_from_state.get("SignalTicker") in set(available["SignalTicker"])
     ):
-        default_ticker = str(selected_from_state["SignalTicker"])
-    if not default_ticker:
-        default_ticker = str(available.iloc[0]["SignalTicker"])
+        selected_ticker = str(selected_from_state["SignalTicker"])
+    if not selected_ticker:
+        row = available.iloc[0]
+        selected_ticker = str(row["SignalTicker"])
+        _set_selected_stock(row, "Portfolio")
+    else:
+        row = available[available["SignalTicker"] == selected_ticker].iloc[0]
 
-    options = available["SignalTicker"].astype(str).tolist()
-    names = available.set_index("SignalTicker")["Name"].astype(str).to_dict()
-    selected_ticker = st.selectbox(
-        "Select portfolio stock for lifecycle",
-        options=options,
-        index=max(0, options.index(default_ticker)) if default_ticker in options else 0,
-        format_func=lambda t: f"{t} - {names.get(t, '')}".strip(" -"),
-        key="portfolio_lifecycle_ticker",
+    st.caption(
+        f"Lifecycle follows selected portfolio stock: {selected_ticker} - {row.get('Name', '')}"
     )
-    row = available[available["SignalTicker"] == selected_ticker].iloc[0]
-    _set_selected_stock(row, "Portfolio")
 
     stock = data_cache.get(selected_ticker)
     benchmark_ticker = str(row.get("Benchmark", ""))
@@ -497,11 +611,7 @@ def render_portfolio_tab() -> None:
         ],
         columns=["Decision", "Risk Flag", "1W Alignment", "1W RS", "1W Momentum State"],
     )
-    st.dataframe(
-        clean_display_df(p_recent_display),
-        use_container_width=True,
-        hide_index=True,
-    )
+    _render_dataframe(p_recent_display)
 
 
 def render_swing_tab() -> None:
@@ -583,7 +693,6 @@ def render_swing_tab() -> None:
             c3.metric("Sell", int(summary.get("Sell", 0)))
 
             action_cols = [
-                "ProductionRank",
                 "Decision",
                 "Name",
                 "SignalTicker",
@@ -599,12 +708,10 @@ def render_swing_tab() -> None:
                 display_df=action_display,
                 table_key="swing_action_table",
                 source_label="Swing",
-                fallback_label="Select swing stock for Stock Details",
             )
 
             with st.expander("Show component details", expanded=False):
                 q_cols = [
-                    "ProductionRank",
                     "Name",
                     "Region",
                     "SignalTicker",
@@ -622,9 +729,7 @@ def render_swing_tab() -> None:
                     "Volatility_Expansion",
                     "Status",
                 ]
-                st.dataframe(
-                    clean_display_df(qualified[q_cols]), use_container_width=True, hide_index=True
-                )
+                _render_dataframe(qualified[q_cols])
     else:
         screener_rows = []
         swing_lookup = {str(r["SignalTicker"]): r for _, r in swing_df.iterrows()}
@@ -742,7 +847,6 @@ def render_swing_tab() -> None:
                 display_df=screener_display,
                 table_key="swing_screener_table",
                 source_label="Swing",
-                fallback_label="Select screener stock for Stock Details",
             )
 
     st.subheader("2) Recently Lost Alignment (Last 6 Weeks)")
@@ -762,7 +866,7 @@ def render_swing_tab() -> None:
             "FailedRules",
             "Status",
         ]
-        st.dataframe(clean_display_df(lost[lost_cols]), use_container_width=True, hide_index=True)
+        _render_dataframe(lost[lost_cols])
 
     st.subheader("3) Weights Lab (Experimental)")
     st.caption("Custom weights do not affect production ranking.")
@@ -788,7 +892,6 @@ def render_swing_tab() -> None:
             custom = apply_custom_weights(qualified, weights)
             custom_cols = [
                 "CustomRank",
-                "ProductionRank",
                 "RankDelta",
                 "Name",
                 "SignalTicker",
@@ -796,9 +899,7 @@ def render_swing_tab() -> None:
                 "CustomScore",
                 "SetupType",
             ]
-            st.dataframe(
-                clean_display_df(custom[custom_cols]), use_container_width=True, hide_index=True
-            )
+            _render_dataframe(custom[custom_cols])
 
     with st.expander("Status / Excluded", expanded=False):
         status_cols = [
@@ -816,9 +917,7 @@ def render_swing_tab() -> None:
         for col in status_cols:
             if col not in swing_df.columns:
                 swing_df[col] = pd.NA
-        st.dataframe(
-            clean_display_df(swing_df[status_cols]), use_container_width=True, hide_index=True
-        )
+        _render_dataframe(swing_df[status_cols])
 
 
 def render_stock_details_tab() -> None:
@@ -958,10 +1057,9 @@ def render_stock_details_tab() -> None:
             with col:
                 st.markdown(f"**{title}**")
                 st.metric("Rating", str(block["label"]))
-                c_buy, c_neutral, c_sell = st.columns(3)
-                c_buy.metric("Buy", int(block["buy"]))
-                c_neutral.metric("Neutral", int(block["neutral"]))
-                c_sell.metric("Sell", int(block["sell"]))
+                st.metric("Buy", int(block["buy"]))
+                st.metric("Neutral", int(block["neutral"]))
+                st.metric("Sell", int(block["sell"]))
 
     st.markdown("### Why This Decision")
     why_left, why_right = st.columns(2)
@@ -974,7 +1072,7 @@ def render_stock_details_tab() -> None:
             lambda v: "Yes" if bool(v) else "No"
         )
         weekly_rules_df = _apply_badges(weekly_rules_df, columns=["Pass"])
-        st.dataframe(clean_display_df(weekly_rules_df), use_container_width=True, hide_index=True)
+        _render_dataframe(weekly_rules_df)
     with why_right:
         st.caption("Daily component signals")
         components_df = pd.DataFrame(
@@ -982,7 +1080,7 @@ def render_stock_details_tab() -> None:
         )
         components_df["Signal"] = components_df["Signal"].map({1: "Buy", 0: "Neutral", -1: "Sell"})
         components_df = _apply_badges(components_df, columns=["Signal"])
-        st.dataframe(clean_display_df(components_df), use_container_width=True, hide_index=True)
+        _render_dataframe(components_df)
 
     st.markdown("### Swing Lifecycle & Technicals")
 
@@ -1064,11 +1162,7 @@ def render_stock_details_tab() -> None:
             ),
             columns=["Decision", "Qualified"],
         )
-        st.dataframe(
-            clean_display_df(s_recent_display),
-            use_container_width=True,
-            hide_index=True,
-        )
+        _render_dataframe(s_recent_display)
 
     st.caption("Latest technical indicators")
     technicals = swing_technical_snapshot(
@@ -1096,9 +1190,9 @@ def render_stock_details_tab() -> None:
                 ]
             )
         ]
-        st.dataframe(clean_display_df(concise), use_container_width=True, hide_index=True)
+        _render_dataframe(concise)
         with st.expander("Show advanced indicators", expanded=False):
-            st.dataframe(clean_display_df(technicals), use_container_width=True, hide_index=True)
+            _render_dataframe(technicals)
 
 
 tab_portfolio, tab_swing, tab_stock_details = st.tabs(["Portfolio", "Swing", "Stock Details"])

@@ -5,9 +5,7 @@
 #    pip-compile --output-file=requirements-dev.txt requirements-dev.in
 #
 altair==4.2.2
-    # via
-    #   -r requirements.in
-    #   streamlit
+    # via streamlit
 attrs==25.4.0
     # via
     #   jsonschema
@@ -57,9 +55,7 @@ identify==2.6.15
 idna==3.11
     # via requests
 importlib-metadata==8.7.1
-    # via
-    #   build
-    #   streamlit
+    # via build
 iniconfig==2.1.0
     # via pytest
 jinja2==3.1.6
@@ -70,12 +66,8 @@ jsonschema==4.25.1
     # via altair
 jsonschema-specifications==2025.9.1
     # via jsonschema
-markdown-it-py==3.0.0
-    # via rich
 markupsafe==3.0.3
     # via jinja2
-mdurl==0.1.2
-    # via markdown-it-py
 multitasking==0.0.12
     # via yfinance
 nodeenv==1.10.0
@@ -88,7 +80,7 @@ numpy==2.0.2
     #   pydeck
     #   streamlit
     #   yfinance
-packaging==26.0
+packaging==25.0
     # via
     #   build
     #   pytest
@@ -126,11 +118,7 @@ pycparser==2.23
 pydeck==0.9.1
     # via streamlit
 pygments==2.19.2
-    # via
-    #   pytest
-    #   rich
-pympler==1.1
-    # via streamlit
+    # via pytest
 pyproject-hooks==1.2.0
     # via
     #   build
@@ -138,9 +126,7 @@ pyproject-hooks==1.2.0
 pytest==8.4.2
     # via -r requirements-dev.in
 python-dateutil==2.9.0.post0
-    # via
-    #   pandas
-    #   streamlit
+    # via pandas
 python-discovery==1.1.0
     # via virtualenv
 pytz==2025.2
@@ -157,24 +143,22 @@ requests==2.32.5
     # via
     #   streamlit
     #   yfinance
-rich==14.3.3
-    # via streamlit
 rpds-py==0.27.1
     # via
     #   jsonschema
     #   referencing
 ruff==0.15.4
     # via -r requirements-dev.in
-semver==3.0.4
-    # via streamlit
 six==1.17.0
     # via python-dateutil
 smmap==5.0.2
     # via gitdb
 soupsieve==2.8.3
     # via beautifulsoup4
-streamlit==1.12.0
+streamlit==1.50.0
     # via -r requirements.in
+tenacity==9.1.2
+    # via streamlit
 toml==0.10.2
     # via streamlit
 tomli==2.4.0
@@ -196,12 +180,8 @@ typing-extensions==4.15.0
     #   virtualenv
 tzdata==2025.3
     # via pandas
-tzlocal==5.3.1
-    # via streamlit
 urllib3==2.6.3
     # via requests
-validators==0.35.0
-    # via streamlit
 virtualenv==21.1.0
     # via pre-commit
 websockets==15.0.1
