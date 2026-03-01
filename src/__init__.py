@@ -1,0 +1,1 @@
+"""Snapshot TA screener package."""
