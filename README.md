@@ -46,6 +46,8 @@ pip-compile requirements-dev.in -o requirements-dev.txt
 
 Note: `requirements*.txt` are generated files and should not be hand-edited.
 Lock files are interpreter-specific; compile them from your target runtime (recommended: Python 3.10/3.11).
+This repository CI runs tests on Python 3.10 and 3.11, so dependency bounds in `requirements.in`
+must remain compatible with both versions.
 
 ## CSV schema
 
