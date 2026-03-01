@@ -80,6 +80,40 @@ def atr_percent(high: pd.Series, low: pd.Series, close: pd.Series, length: int =
     return atr_val / close.replace(0, np.nan)
 
 
+def momentum_pct(series: pd.Series, length: int = 10) -> pd.Series:
+    return series.pct_change(length)
+
+
+def awesome_oscillator(high: pd.Series, low: pd.Series, fast: int = 5, slow: int = 34) -> pd.Series:
+    median_price = (high + low) / 2.0
+    return sma(median_price, fast) - sma(median_price, slow)
+
+
+def cci(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 20) -> pd.Series:
+    tp = (high + low + close) / 3.0
+    tp_sma = sma(tp, length)
+    mean_dev = (tp - tp_sma).abs().rolling(length, min_periods=length).mean()
+    denom = 0.015 * mean_dev.replace(0, np.nan)
+    return (tp - tp_sma) / denom
+
+
+def stochastic_oscillator(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    k_length: int = 14,
+    smooth_k: int = 3,
+    d_length: int = 3,
+) -> tuple[pd.Series, pd.Series]:
+    lowest_low = low.rolling(k_length, min_periods=k_length).min()
+    highest_high = high.rolling(k_length, min_periods=k_length).max()
+    range_ = (highest_high - lowest_low).replace(0, np.nan)
+    raw_k = 100 * (close - lowest_low) / range_
+    k = raw_k.rolling(smooth_k, min_periods=smooth_k).mean()
+    d = k.rolling(d_length, min_periods=d_length).mean()
+    return k, d
+
+
 def relative_strength(stock_close: pd.Series, benchmark_close: pd.Series) -> pd.Series:
     aligned = pd.concat([stock_close, benchmark_close], axis=1, join="inner").dropna()
     if aligned.empty:

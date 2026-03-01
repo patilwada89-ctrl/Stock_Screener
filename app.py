@@ -8,6 +8,7 @@ import streamlit as st
 
 from src import config
 from src.data import fetch_ticker_data
+from src.ratings import technical_ratings
 from src.signals import (
     apply_custom_weights,
     decision_from_health_score,
@@ -533,6 +534,26 @@ def render_stock_details_tab() -> None:
     dc5.metric("Risk Flag", str(decision_snapshot["risk_flag"]))
     dc6.metric("Thresholds", f"Sell {s_sell:.2f} / Buy {s_buy:.2f}")
     st.caption(f"Risk reason: {decision_snapshot['risk_reason']}")
+
+    st.markdown("### Technical Ratings")
+    ratings = technical_ratings(stock.daily)
+    if ratings.get("status") != "OK":
+        st.info(f"Ratings unavailable: {ratings.get('status', 'n/a')}")
+    else:
+        r1, r2, r3 = st.columns(3)
+        blocks = [
+            ("Oscillators", ratings["oscillators"]),
+            ("Summary", ratings["summary"]),
+            ("Moving Averages", ratings["moving_averages"]),
+        ]
+        for col, (title, block) in zip((r1, r2, r3), blocks):
+            with col:
+                st.markdown(f"**{title}**")
+                st.metric("Rating", str(block["label"]))
+                c_buy, c_neutral, c_sell = st.columns(3)
+                c_buy.metric("Buy", int(block["buy"]))
+                c_neutral.metric("Neutral", int(block["neutral"]))
+                c_sell.metric("Sell", int(block["sell"]))
 
     st.markdown("### Why This Decision")
     why_left, why_right = st.columns(2)
