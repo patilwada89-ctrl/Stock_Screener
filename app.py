@@ -307,6 +307,30 @@ def _set_selected_stock(row: pd.Series, source: str) -> None:
     )
 
 
+def _apply_selected_row(
+    source_df: pd.DataFrame,
+    selected_row: int | None,
+    source_label: str,
+    table_key: str,
+) -> bool:
+    last_row_key = f"{table_key}_last_selected_row"
+    st.session_state[last_row_key] = selected_row
+    if not isinstance(selected_row, int) or not (0 <= selected_row < len(source_df)):
+        return False
+
+    row = source_df.iloc[selected_row]
+    row_ticker = str(row.get("SignalTicker", "")).strip()
+    selected_from_state = st.session_state.get("selected_stock", {})
+    current_ticker = str(selected_from_state.get("SignalTicker", "")).strip()
+    current_source = str(selected_from_state.get("Source", "")).strip()
+
+    if row_ticker and (row_ticker != current_ticker or current_source != source_label):
+        _store_ranked_context(source_df, source_label)
+        _set_selected_stock(row, source_label)
+        return True
+    return False
+
+
 def _store_ranked_context(source_df: pd.DataFrame, source_label: str) -> None:
     if source_df.empty or "SignalTicker" not in source_df.columns:
         return
@@ -379,16 +403,19 @@ def _render_selectable_stock_table(
             return
 
         checked_rows = edited.index[edited["Select"] == True].tolist()  # noqa: E712
-        selected_row = checked_rows[-1] if checked_rows else None
-        last_row_key = f"{table_key}_last_selected_row"
-        previous_row = st.session_state.get(last_row_key)
+        preselected_row = next((i for i, flag in enumerate(select_col) if flag), None)
+        selected_row = None
+        if checked_rows:
+            if len(checked_rows) == 1:
+                selected_row = checked_rows[0]
+            else:
+                changed_rows = [r for r in checked_rows if r != preselected_row]
+                selected_row = changed_rows[-1] if changed_rows else checked_rows[-1]
 
-        if selected_row != previous_row:
-            st.session_state[last_row_key] = selected_row
-            if isinstance(selected_row, int) and 0 <= selected_row < len(source_df):
-                _store_ranked_context(source_df, source_label)
-                _set_selected_stock(source_df.iloc[selected_row], source_label)
-                _trigger_rerun()
+        updated = _apply_selected_row(source_df, selected_row, source_label, table_key)
+        if len(checked_rows) > 1 or updated:
+            # Enforce single selection and keep Stock Details synced.
+            _trigger_rerun()
         return
 
     if DATAFRAME_HAS_SELECTION:
@@ -399,15 +426,7 @@ def _render_selectable_stock_table(
             selected_rows = event.selection.rows
 
         selected_row = selected_rows[0] if selected_rows else None
-        last_row_key = f"{table_key}_last_selected_row"
-        previous_row = st.session_state.get(last_row_key)
-
-        # Only update global selected stock when this table selection actually changed.
-        if selected_row != previous_row:
-            st.session_state[last_row_key] = selected_row
-            if isinstance(selected_row, int) and 0 <= selected_row < len(source_df):
-                _store_ranked_context(source_df, source_label)
-                _set_selected_stock(source_df.iloc[selected_row], source_label)
+        _apply_selected_row(source_df, selected_row, source_label, table_key)
 
         st.caption("Click a row to open it in the Stock Details tab.")
         return
@@ -436,8 +455,7 @@ def _render_selectable_stock_table(
             if checked and ticker and ticker != selected_ticker:
                 for j in source_df.index:
                     st.session_state[f"{table_key}_chk_{j}"] = j == i
-                _store_ranked_context(source_df, source_label)
-                _set_selected_stock(row, source_label)
+                _apply_selected_row(source_df, i, source_label, table_key)
                 _trigger_rerun()
 
 
@@ -537,7 +555,6 @@ def render_portfolio_tab() -> None:
     if not selected_ticker:
         row = available.iloc[0]
         selected_ticker = str(row["SignalTicker"])
-        _set_selected_stock(row, "Portfolio")
     else:
         row = available[available["SignalTicker"] == selected_ticker].iloc[0]
 
