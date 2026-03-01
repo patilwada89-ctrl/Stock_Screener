@@ -17,6 +17,7 @@ from src.signals import (
     portfolio_lifecycle_frame,
     rank_qualified,
     sort_portfolio_for_risk,
+    swing_decision_snapshot,
     swing_lifecycle_frame,
     swing_technical_snapshot,
 )
@@ -502,7 +503,7 @@ def render_stock_details_tab() -> None:
         st.warning(f"Benchmark data unavailable: {bench.status}")
         return
 
-    st.markdown("### Swing Lifecycle & Technicals")
+    st.markdown("### Decision Card")
     s_default = _coerce_threshold_pair(st.session_state.get("swing_thresholds"), (-0.20, 0.30))
     s_sell, s_buy = st.slider(
         "Swing production thresholds (Sell / Buy)",
@@ -512,6 +513,39 @@ def render_stock_details_tab() -> None:
         step=0.05,
         key="stock_details_swing_thresholds",
     )
+
+    decision_snapshot = swing_decision_snapshot(
+        stock_daily=stock.daily,
+        stock_weekly=stock.weekly,
+        bench_weekly=bench.weekly,
+        buy_threshold=s_buy,
+        sell_threshold=s_sell,
+    )
+    if decision_snapshot.get("status") != "OK":
+        st.info(f"Decision snapshot unavailable: {decision_snapshot.get('status', 'n/a')}")
+        return
+
+    dc1, dc2, dc3, dc4, dc5, dc6 = st.columns(6)
+    dc1.metric("Production Score", f"{float(decision_snapshot['production_score']):.4f}")
+    dc2.metric("Decision", str(decision_snapshot["decision"]))
+    dc3.metric("Qualified (Weekly)", "Yes" if bool(decision_snapshot["weekly_qualified"]) else "No")
+    dc4.metric("SetupType", str(decision_snapshot["setup_type"]))
+    dc5.metric("Risk Flag", str(decision_snapshot["risk_flag"]))
+    dc6.metric("Thresholds", f"Sell {s_sell:.2f} / Buy {s_buy:.2f}")
+    st.caption(f"Risk reason: {decision_snapshot['risk_reason']}")
+
+    st.markdown("### Why This Decision")
+    why_left, why_right = st.columns(2)
+    with why_left:
+        st.caption("Weekly hard filter checks")
+        weekly_rules_df = pd.DataFrame(decision_snapshot["weekly_rules"])
+        st.dataframe(clean_display_df(weekly_rules_df), use_container_width=True, hide_index=True)
+    with why_right:
+        st.caption("Daily component signals")
+        components_df = pd.DataFrame(decision_snapshot["component_signals"])
+        st.dataframe(clean_display_df(components_df), use_container_width=True, hide_index=True)
+
+    st.markdown("### Swing Lifecycle & Technicals")
 
     swing_lifecycle = swing_lifecycle_frame(
         stock_daily=stock.daily,
@@ -577,7 +611,24 @@ def render_stock_details_tab() -> None:
     if technicals.empty:
         st.info("Technical snapshot unavailable for this stock.")
     else:
-        st.dataframe(clean_display_df(technicals), use_container_width=True, hide_index=True)
+        concise = technicals[technicals["Indicator"].isin(
+            [
+                "Production Score",
+                "SetupType",
+                "Weekly Qualified",
+                "Rule Alignment",
+                "Rule EMA20 Slope",
+                "Rule RS Rising",
+                "1D Close",
+                "1D RSI14",
+                "1D MACD Histogram",
+                "1D EMA20",
+                "1D ATR14%",
+            ]
+        )]
+        st.dataframe(clean_display_df(concise), use_container_width=True, hide_index=True)
+        with st.expander("Show advanced indicators", expanded=False):
+            st.dataframe(clean_display_df(technicals), use_container_width=True, hide_index=True)
 
 
 tab_portfolio, tab_swing, tab_stock_details = st.tabs(["Portfolio", "Swing", "Stock Details"])

@@ -364,6 +364,150 @@ def decision_from_production_score(production_score: float, buy_threshold: float
     return _decision_from_score(production_score, buy_threshold, sell_threshold)
 
 
+def _swing_risk_flag(
+    weekly_qualified: bool,
+    failed_rules: list[str],
+    decision: str,
+) -> tuple[str, str]:
+    if not weekly_qualified:
+        reason = "Weekly hard filter failed"
+        if failed_rules:
+            reason = f"{reason}: {', '.join(failed_rules)}"
+        return "Breakdown", reason
+    if decision == "Sell":
+        return "Watch", "Weekly trend is qualified, but daily momentum score is weak."
+    if decision == "Hold":
+        return "Watch", "Weekly trend is qualified, but daily signals are mixed."
+    return "OK", "Weekly alignment and daily momentum are supportive."
+
+
+def swing_decision_snapshot(
+    stock_daily: pd.DataFrame,
+    stock_weekly: pd.DataFrame,
+    bench_weekly: pd.DataFrame,
+    buy_threshold: float,
+    sell_threshold: float,
+) -> dict[str, Any]:
+    if stock_daily.empty or stock_weekly.empty or bench_weekly.empty:
+        return {"status": "Insufficient data"}
+    if "Close" not in stock_weekly.columns or "Close" not in bench_weekly.columns:
+        return {"status": "Missing weekly close data"}
+
+    wf = weekly_filter_frame(stock_weekly["Close"], bench_weekly["Close"])
+    if wf.empty:
+        return {"status": "No aligned weekly data"}
+
+    latest_w = wf.iloc[-1]
+    weekly_qualified = bool(latest_w["qualified"])
+    daily_eval = daily_components(stock_daily)
+    if daily_eval.get("status") != "OK":
+        return {"status": str(daily_eval.get("status", "Daily evaluation failed"))}
+
+    production_score = float(daily_eval["score"])
+    decision = decision_from_production_score(production_score, buy_threshold, sell_threshold)
+    setup_type = str(daily_eval["setup_type"])
+
+    failed_rules: list[str] = []
+    if not bool(latest_w["rule_alignment"]):
+        failed_rules.append("EMA20>EMA50>EMA200")
+    if not bool(latest_w["rule_slope"]):
+        failed_rules.append("EMA20 slope")
+    if not bool(latest_w["rule_rs"]):
+        failed_rules.append("RS rising")
+
+    risk_flag, risk_reason = _swing_risk_flag(weekly_qualified, failed_rules, decision)
+
+    ema20_t3 = wf["EMA20"].iloc[-4] if len(wf) >= 4 else np.nan
+    rs_t3 = wf["RS_EMA20"].iloc[-4] if len(wf) >= 4 else np.nan
+    values = daily_eval["values"]
+    comps = daily_eval["components"]
+
+    weekly_rules = [
+        {
+            "Rule": "EMA20_week > EMA50_week > EMA200_week",
+            "Pass": bool(latest_w["rule_alignment"]),
+            "Value": f"{latest_w['EMA20']:.3f} > {latest_w['EMA50']:.3f} > {latest_w['EMA200']:.3f}",
+        },
+        {
+            "Rule": "EMA20_week slope positive",
+            "Pass": bool(latest_w["rule_slope"]),
+            "Value": (
+                f"{latest_w['EMA20']:.3f} vs {ema20_t3:.3f} (t-3)"
+                if pd.notna(ema20_t3)
+                else f"{latest_w['EMA20']:.3f} vs n/a (t-3)"
+            ),
+        },
+        {
+            "Rule": "RS_EMA20_week rising",
+            "Pass": bool(latest_w["rule_rs"]),
+            "Value": (
+                f"{latest_w['RS_EMA20']:.6f} vs {rs_t3:.6f} (t-3)"
+                if pd.notna(latest_w["RS_EMA20"]) and pd.notna(rs_t3)
+                else "n/a"
+            ),
+        },
+    ]
+
+    component_signals = [
+        {
+            "Component": "RSI14 State",
+            "Signal": int(comps["RSI14_State"]),
+            "Value": f"RSI14={values['RSI14']:.2f}",
+        },
+        {
+            "Component": "RSI Acceleration",
+            "Signal": int(comps["RSI_Accel"]),
+            "Value": f"RSI14={values['RSI14']:.2f}",
+        },
+        {
+            "Component": "MACD Histogram Sign",
+            "Signal": int(comps["MACD_Hist_Sign"]),
+            "Value": f"Hist={values['MACD_Hist']:.4f}",
+        },
+        {
+            "Component": "MACD Histogram Acceleration",
+            "Signal": int(comps["MACD_Hist_Accel"]),
+            "Value": f"Hist={values['MACD_Hist']:.4f}",
+        },
+        {
+            "Component": "Price vs EMA20",
+            "Signal": int(comps["Price_vs_EMA20"]),
+            "Value": f"Close={values['Close']:.3f}, EMA20={values['EMA20_D']:.3f}",
+        },
+        {
+            "Component": "Volume Confirmation",
+            "Signal": int(comps["Volume_Confirm"]),
+            "Value": (
+                f"Vol={values['Volume']:.0f}, SMA20={values['Volume_SMA20']:.0f}"
+                if pd.notna(values["Volume"]) and pd.notna(values["Volume_SMA20"])
+                else "Volume data missing"
+            ),
+        },
+        {
+            "Component": "Volatility Expansion",
+            "Signal": int(comps["Volatility_Expansion"]),
+            "Value": (
+                f"ATR14%={values['ATR14_Pct']:.4f}, SMA20={values['ATR14_Pct_SMA20']:.4f}"
+                if pd.notna(values["ATR14_Pct"]) and pd.notna(values["ATR14_Pct_SMA20"])
+                else "ATR data missing"
+            ),
+        },
+    ]
+
+    return {
+        "status": "OK",
+        "production_score": production_score,
+        "decision": decision,
+        "weekly_qualified": weekly_qualified,
+        "setup_type": setup_type,
+        "risk_flag": risk_flag,
+        "risk_reason": risk_reason,
+        "failed_rules": failed_rules,
+        "weekly_rules": weekly_rules,
+        "component_signals": component_signals,
+    }
+
+
 def swing_lifecycle_frame(
     stock_daily: pd.DataFrame,
     stock_weekly: pd.DataFrame,
