@@ -7,19 +7,45 @@ A Streamlit app for snapshot-only technical analysis with three tabs:
 
 ## Context Pack (Read First)
 
-- Agent/contributor guide: `/Users/ashish/vscode/Stock_Screener/AGENTS.md`
-- Project context: `/Users/ashish/vscode/Stock_Screener/docs/context.md`
-- Architecture/dataflow: `/Users/ashish/vscode/Stock_Screener/docs/overview.md`
-- Module contracts: `/Users/ashish/vscode/Stock_Screener/docs/api.md`
+- Agent/contributor guide: `AGENTS.md`
+- Project context: `docs/context.md`
+- Architecture/dataflow: `docs/overview.md`
+- Module contracts: `docs/api.md`
 
-## Run
+## Setup
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
+pip install -r requirements-dev.txt
 ```
+
+## Commands
+
+```bash
+make dev      # streamlit run app.py
+make test     # pytest -q
+make lint     # ruff check .
+make format   # ruff format .
+```
+
+## Dependency locking (pip-tools)
+
+Runtime and dev lockfiles are generated from:
+- `requirements.in` -> `requirements.txt`
+- `requirements-dev.in` -> `requirements-dev.txt`
+
+Recompile locks:
+
+```bash
+make lock
+# or explicitly:
+pip-compile requirements.in -o requirements.txt
+pip-compile requirements-dev.in -o requirements-dev.txt
+```
+
+Note: `requirements*.txt` are generated files and should not be hand-edited.
+Lock files are interpreter-specific; compile them from your target runtime (recommended: Python 3.10/3.11).
 
 ## CSV schema
 
@@ -38,9 +64,9 @@ Delimiter handling:
 - Loader auto-detects `,` and `;`.
 
 Examples:
-- `/Users/ashish/vscode/Stock_Screener/examples/portfolio.csv`
-- `/Users/ashish/vscode/Stock_Screener/examples/watchlist.csv`
-- `/Users/ashish/vscode/Stock_Screener/examples/xfra_swing_trading_universe.csv`
+- `examples/portfolio.csv`
+- `examples/watchlist.csv`
+- `examples/xfra_swing_trading_universe.csv`
 
 ## Score definitions
 
@@ -74,7 +100,7 @@ Examples:
 - US default: `SPY`
 - EU default: `EXSA.DE`
 
-Configure in `/Users/ashish/vscode/Stock_Screener/src/config.py`.
+Configure in `src/config.py`.
 
 ## Debug mode
 
@@ -83,12 +109,12 @@ Use sidebar `Debug mode` to inspect:
 - date dtype/min/max diagnostics
 - intermediate values used by rules
 
-See `/Users/ashish/vscode/Stock_Screener/docs/debugging.md`.
+See `docs/debugging.md`.
 
 ## Tests
 
 ```bash
-pytest
+make test
 ```
 
 Current tests include rule checks, score naming separation, lifecycle/date prep, and loader compatibility.
