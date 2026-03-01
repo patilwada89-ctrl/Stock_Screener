@@ -200,3 +200,40 @@ def technical_ratings(daily_df: pd.DataFrame) -> dict[str, Any]:
         "summary": summary,
         "values": values,
     }
+
+
+def screener_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
+    ratings = technical_ratings(daily_df)
+    if ratings.get("status") != "OK":
+        return {
+            "status": str(ratings.get("status", "Ratings unavailable")),
+            "Summary Rating": "Neutral",
+            "MA Rating": "Neutral",
+            "Osc Rating": "Neutral",
+            "Summary Score": 0.0,
+            "MA Score": 0.0,
+            "Osc Score": 0.0,
+            "RSI(14)": np.nan,
+            "Momentum(10)": np.nan,
+            "AO": np.nan,
+            "CCI(20)": np.nan,
+            "Stoch %K": np.nan,
+            "Stoch %D": np.nan,
+        }
+
+    values = ratings.get("values", {})
+    return {
+        "status": "OK",
+        "Summary Rating": str(ratings["summary"]["label"]),
+        "MA Rating": str(ratings["moving_averages"]["label"]),
+        "Osc Rating": str(ratings["oscillators"]["label"]),
+        "Summary Score": float(ratings["summary"]["score"]),
+        "MA Score": float(ratings["moving_averages"]["score"]),
+        "Osc Score": float(ratings["oscillators"]["score"]),
+        "RSI(14)": values.get("RSI14", np.nan),
+        "Momentum(10)": values.get("Momentum10", np.nan),
+        "AO": values.get("AO", np.nan),
+        "CCI(20)": values.get("CCI20", np.nan),
+        "Stoch %K": values.get("StochK", np.nan),
+        "Stoch %D": values.get("StochD", np.nan),
+    }

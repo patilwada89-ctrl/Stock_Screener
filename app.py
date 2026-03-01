@@ -3,14 +3,16 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from src import config
 from src.data import fetch_ticker_data
-from src.ratings import technical_ratings
+from src.ratings import screener_snapshot, technical_ratings
 from src.signals import (
     apply_custom_weights,
+    daily_components,
     decision_from_health_score,
     decision_from_production_score,
     evaluate_portfolio_stock,
@@ -322,8 +324,14 @@ def render_swing_tab() -> None:
     swing_df = pd.DataFrame(rows)
     qualified = swing_df[(swing_df["Qualified"] == True) & (swing_df["Status"] == "OK")].copy()  # noqa: E712
     qualified = rank_qualified(qualified)
+    view_mode = st.radio(
+        "View",
+        ["Action Board", "Screener Table"],
+        horizontal=True,
+        key="swing_view_mode",
+    )
 
-    st.subheader("1) Action Board (Qualified Stocks Only)")
+    st.subheader("1) Swing Screener")
     sell_threshold, buy_threshold = st.slider(
         "Production Score thresholds (Sell / Buy)",
         min_value=-1.0,
@@ -345,58 +353,148 @@ def render_swing_tab() -> None:
         ),
     )
 
-    if qualified.empty:
-        st.warning("No stocks currently pass the weekly hard filter.")
-    else:
-        qualified["Decision"] = qualified["ProductionScore"].apply(
-            lambda s: decision_from_production_score(float(s), buy_threshold, sell_threshold)
-        )
-        summary = qualified["Decision"].value_counts().to_dict()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Buy", int(summary.get("Buy", 0)))
-        c2.metric("Hold", int(summary.get("Hold", 0)))
-        c3.metric("Sell", int(summary.get("Sell", 0)))
+    if view_mode == "Action Board":
+        if qualified.empty:
+            st.warning("No stocks currently pass the weekly hard filter.")
+        else:
+            qualified["Decision"] = qualified["ProductionScore"].apply(
+                lambda s: decision_from_production_score(float(s), buy_threshold, sell_threshold)
+            )
+            summary = qualified["Decision"].value_counts().to_dict()
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Buy", int(summary.get("Buy", 0)))
+            c2.metric("Hold", int(summary.get("Hold", 0)))
+            c3.metric("Sell", int(summary.get("Sell", 0)))
 
-        action_cols = [
-            "ProductionRank",
-            "Decision",
-            "Name",
-            "SignalTicker",
-            "TradeTicker_DE",
-            "Price",
-            "SetupType",
-            "ProductionScore",
-            "Status",
-        ]
-        _render_selectable_stock_table(
-            source_df=qualified,
-            display_df=qualified[action_cols],
-            table_key="swing_action_table",
-            source_label="Swing",
-            fallback_label="Select swing stock for Stock Details",
-        )
-
-        with st.expander("Show component details", expanded=False):
-            q_cols = [
+            action_cols = [
                 "ProductionRank",
+                "Decision",
                 "Name",
-                "Region",
                 "SignalTicker",
                 "TradeTicker_DE",
                 "Price",
                 "SetupType",
                 "ProductionScore",
-                "Decision",
-                "RSI14_State",
-                "RSI_Accel",
-                "MACD_Hist_Sign",
-                "MACD_Hist_Accel",
-                "Price_vs_EMA20",
-                "Volume_Confirm",
-                "Volatility_Expansion",
                 "Status",
             ]
-            st.dataframe(clean_display_df(qualified[q_cols]), use_container_width=True, hide_index=True)
+            _render_selectable_stock_table(
+                source_df=qualified,
+                display_df=qualified[action_cols],
+                table_key="swing_action_table",
+                source_label="Swing",
+                fallback_label="Select swing stock for Stock Details",
+            )
+
+            with st.expander("Show component details", expanded=False):
+                q_cols = [
+                    "ProductionRank",
+                    "Name",
+                    "Region",
+                    "SignalTicker",
+                    "TradeTicker_DE",
+                    "Price",
+                    "SetupType",
+                    "ProductionScore",
+                    "Decision",
+                    "RSI14_State",
+                    "RSI_Accel",
+                    "MACD_Hist_Sign",
+                    "MACD_Hist_Accel",
+                    "Price_vs_EMA20",
+                    "Volume_Confirm",
+                    "Volatility_Expansion",
+                    "Status",
+                ]
+                st.dataframe(clean_display_df(qualified[q_cols]), use_container_width=True, hide_index=True)
+    else:
+        screener_rows = []
+        swing_lookup = {str(r["SignalTicker"]): r for _, r in swing_df.iterrows()}
+        for _, meta in df.iterrows():
+            ticker = str(meta["SignalTicker"])
+            stock = data_cache.get(ticker)
+            stock_status = getattr(stock, "status", "Ticker data missing")
+            base = swing_lookup.get(ticker, {})
+
+            row = {
+                "Name": meta["Name"],
+                "Region": meta["Region"],
+                "SignalTicker": ticker,
+                "TradeTicker_DE": meta.get("TradeTicker_DE", ""),
+                "Benchmark": meta["Benchmark"],
+                "Qualified (Weekly)": bool(base.get("Qualified", False)),
+                "SetupType": base.get("SetupType", ""),
+                "Production Score": base.get("ProductionScore", np.nan),
+                "Price": base.get("Price", np.nan),
+                "Status": base.get("Status", stock_status),
+            }
+
+            if stock_status == "OK":
+                snap = screener_snapshot(getattr(stock, "daily", pd.DataFrame()))
+                row.update(snap)
+
+                # Show Production Score in screener even when weekly filter is not currently qualified.
+                if pd.isna(row["Production Score"]):
+                    daily_eval = daily_components(getattr(stock, "daily", pd.DataFrame()))
+                    if daily_eval.get("status") == "OK":
+                        row["Production Score"] = float(daily_eval["score"])
+                        row["SetupType"] = str(daily_eval["setup_type"])
+            else:
+                row.update(
+                    {
+                        "Summary Rating": "Neutral",
+                        "MA Rating": "Neutral",
+                        "Osc Rating": "Neutral",
+                        "Summary Score": -99.0,
+                        "MA Score": -99.0,
+                        "Osc Score": -99.0,
+                        "RSI(14)": np.nan,
+                        "Momentum(10)": np.nan,
+                        "AO": np.nan,
+                        "CCI(20)": np.nan,
+                        "Stoch %K": np.nan,
+                        "Stoch %D": np.nan,
+                    }
+                )
+
+            screener_rows.append(row)
+
+        screener_df = pd.DataFrame(screener_rows)
+        if screener_df.empty:
+            st.info("No screener rows available.")
+        else:
+            screener_df = screener_df.sort_values(
+                ["Summary Score", "Production Score"],
+                ascending=[False, False],
+                na_position="last",
+            ).reset_index(drop=True)
+            screener_cols = [
+                "Name",
+                "Region",
+                "SignalTicker",
+                "TradeTicker_DE",
+                "Benchmark",
+                "Qualified (Weekly)",
+                "Summary Rating",
+                "MA Rating",
+                "Osc Rating",
+                "Production Score",
+                "SetupType",
+                "Price",
+                "RSI(14)",
+                "Momentum(10)",
+                "AO",
+                "CCI(20)",
+                "Stoch %K",
+                "Stoch %D",
+                "Status",
+            ]
+            _render_selectable_stock_table(
+                source_df=screener_df,
+                display_df=screener_df[screener_cols],
+                table_key="swing_screener_table",
+                source_label="Swing",
+                fallback_label="Select screener stock for Stock Details",
+            )
 
     st.subheader("2) Recently Lost Alignment (Last 6 Weeks)")
     if "RecentlyLost" in swing_df.columns:
