@@ -375,7 +375,7 @@ def swing_lifecycle_frame(
             "Rule_Alignment",
             "Rule_Slope",
             "Rule_RS",
-            "Health Score",
+            "Production Score",
             "SetupType",
             "RSI14_State",
             "RSI_Accel",
@@ -400,7 +400,7 @@ def swing_lifecycle_frame(
     out["Rule_Alignment"] = wf["rule_alignment"].fillna(False).astype(bool)
     out["Rule_Slope"] = wf["rule_slope"].fillna(False).astype(bool)
     out["Rule_RS"] = wf["rule_rs"].fillna(False).astype(bool)
-    out["Health Score"] = np.nan
+    out["Production Score"] = np.nan
     out["SetupType"] = ""
     out["RSI14_State"] = 0
     out["RSI_Accel"] = 0
@@ -421,7 +421,7 @@ def swing_lifecycle_frame(
             out.at[dt, comp] = int(comp_value)
 
         if bool(out.at[dt, "Qualified"]):
-            out.at[dt, "Health Score"] = float(eval_daily["score"])
+            out.at[dt, "Production Score"] = float(eval_daily["score"])
 
     return out
 

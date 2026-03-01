@@ -203,6 +203,90 @@ def render_portfolio_tab() -> None:
         fallback_label="Select portfolio stock for Stock Details",
     )
 
+    st.subheader("Portfolio Lifecycle")
+    available = out[out["Status"] == "OK"].copy()
+    if available.empty:
+        st.info("Lifecycle chart appears when at least one portfolio stock has valid data.")
+        return
+
+    selected_from_state = st.session_state.get("selected_stock", {})
+    default_ticker = ""
+    if (
+        isinstance(selected_from_state, dict)
+        and selected_from_state.get("Source") == "Portfolio"
+        and selected_from_state.get("SignalTicker") in set(available["SignalTicker"])
+    ):
+        default_ticker = str(selected_from_state["SignalTicker"])
+    if not default_ticker:
+        default_ticker = str(available.iloc[0]["SignalTicker"])
+
+    options = available["SignalTicker"].astype(str).tolist()
+    names = available.set_index("SignalTicker")["Name"].astype(str).to_dict()
+    selected_ticker = st.selectbox(
+        "Select portfolio stock for lifecycle",
+        options=options,
+        index=max(0, options.index(default_ticker)) if default_ticker in options else 0,
+        format_func=lambda t: f"{t} - {names.get(t, '')}".strip(" -"),
+        key="portfolio_lifecycle_ticker",
+    )
+    row = available[available["SignalTicker"] == selected_ticker].iloc[0]
+    _set_selected_stock(row, "Portfolio")
+
+    stock = data_cache.get(selected_ticker)
+    benchmark_ticker = str(row.get("Benchmark", ""))
+    bench = data_cache.get(benchmark_ticker)
+    if getattr(stock, "status", "") != "OK" or getattr(bench, "status", "") != "OK":
+        st.info("Lifecycle data is unavailable for this selection.")
+        return
+
+    lifecycle = portfolio_lifecycle_frame(
+        stock_weekly=getattr(stock, "weekly", pd.DataFrame()),
+        stock_monthly=getattr(stock, "monthly", pd.DataFrame()),
+        bench_weekly=getattr(bench, "weekly", pd.DataFrame()),
+    )
+    if lifecycle.empty:
+        st.info("Lifecycle data is unavailable for this selection.")
+        return
+
+    lifecycle = lifecycle.copy()
+    lifecycle["Decision"] = lifecycle["Health Score"].apply(
+        lambda v: decision_from_health_score(float(v), buy_threshold, sell_threshold)
+    )
+
+    p_chart = lifecycle[["Health Score"]].copy()
+    p_chart["Buy Threshold"] = buy_threshold
+    p_chart["Sell Threshold"] = sell_threshold
+    st.line_chart(p_chart, use_container_width=True)
+
+    latest = lifecycle.iloc[-1]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Latest Health Score", f"{latest['Health Score']:.4f}")
+    c2.metric("Decision", str(latest["Decision"]))
+    c3.metric("Risk Flag", str(latest["Risk Flag"]))
+    c4.metric("1W Alignment", str(latest["1W Alignment"]))
+
+    p_recent = lifecycle.tail(26).copy()
+    p_recent.insert(0, "Week", p_recent.index)
+    p_recent = p_recent.reset_index(drop=True)
+    st.dataframe(
+        clean_display_df(
+            p_recent[
+                [
+                    "Week",
+                    "Health Score",
+                    "Decision",
+                    "Risk Flag",
+                    "1M Regime",
+                    "1W Alignment",
+                    "1W RS",
+                    "1W Momentum State",
+                ]
+            ]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
 
 def render_swing_tab() -> None:
     df, err = pick_universe_df("Momentum Swing Screener", WATCHLIST_EXAMPLE, "swing")
@@ -418,63 +502,6 @@ def render_stock_details_tab() -> None:
         st.warning(f"Benchmark data unavailable: {bench.status}")
         return
 
-    st.markdown("### Portfolio Lifecycle")
-    p_default = _coerce_threshold_pair(st.session_state.get("portfolio_thresholds"), (-0.25, 0.35))
-    p_sell, p_buy = st.slider(
-        "Portfolio health thresholds (Sell / Buy)",
-        min_value=-1.0,
-        max_value=1.0,
-        value=p_default,
-        step=0.05,
-        key="stock_details_portfolio_thresholds",
-    )
-
-    portfolio_lifecycle = portfolio_lifecycle_frame(
-        stock_weekly=stock.weekly,
-        stock_monthly=stock.monthly,
-        bench_weekly=bench.weekly,
-    )
-    if portfolio_lifecycle.empty:
-        st.info("Portfolio lifecycle unavailable for this stock.")
-    else:
-        portfolio_lifecycle = portfolio_lifecycle.copy()
-        portfolio_lifecycle["Decision"] = portfolio_lifecycle["Health Score"].apply(
-            lambda v: decision_from_health_score(float(v), p_buy, p_sell)
-        )
-        p_chart = portfolio_lifecycle[["Health Score"]].copy()
-        p_chart["Buy Threshold"] = p_buy
-        p_chart["Sell Threshold"] = p_sell
-        st.line_chart(p_chart, use_container_width=True)
-
-        p_latest = portfolio_lifecycle.iloc[-1]
-        pc1, pc2, pc3, pc4 = st.columns(4)
-        pc1.metric("Latest Health Score", f"{p_latest['Health Score']:.4f}")
-        pc2.metric("Decision", str(p_latest["Decision"]))
-        pc3.metric("Risk Flag", str(p_latest["Risk Flag"]))
-        pc4.metric("1W Alignment", str(p_latest["1W Alignment"]))
-
-        p_recent = portfolio_lifecycle.tail(26).copy()
-        p_recent.insert(0, "Week", p_recent.index)
-        p_recent = p_recent.reset_index(drop=True)
-        st.dataframe(
-            clean_display_df(
-                p_recent[
-                    [
-                        "Week",
-                        "Health Score",
-                        "Decision",
-                        "Risk Flag",
-                        "1M Regime",
-                        "1W Alignment",
-                        "1W RS",
-                        "1W Momentum State",
-                    ]
-                ]
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
     st.markdown("### Swing Lifecycle & Technicals")
     s_default = _coerce_threshold_pair(st.session_state.get("swing_thresholds"), (-0.20, 0.30))
     s_sell, s_buy = st.slider(
@@ -495,19 +522,19 @@ def render_stock_details_tab() -> None:
         st.info("Swing lifecycle unavailable for this stock.")
     else:
         swing_lifecycle = swing_lifecycle.copy()
-        swing_lifecycle["Decision"] = swing_lifecycle["Health Score"].apply(
+        swing_lifecycle["Decision"] = swing_lifecycle["Production Score"].apply(
             lambda v: decision_from_production_score(float(v), s_buy, s_sell) if pd.notna(v) else "No Signal"
         )
 
-        s_chart = swing_lifecycle[["Health Score"]].copy()
+        s_chart = swing_lifecycle[["Production Score"]].copy()
         s_chart["Buy Threshold"] = s_buy
         s_chart["Sell Threshold"] = s_sell
         st.line_chart(s_chart, use_container_width=True)
 
         s_latest = swing_lifecycle.iloc[-1]
-        s_latest_score = s_latest["Health Score"]
+        s_latest_score = s_latest["Production Score"]
         sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("Latest Health Score", f"{s_latest_score:.4f}" if pd.notna(s_latest_score) else "n/a")
+        sc1.metric("Latest Production Score", f"{s_latest_score:.4f}" if pd.notna(s_latest_score) else "n/a")
         sc2.metric("Decision", str(s_latest["Decision"]))
         sc3.metric("Qualified (Weekly)", "Yes" if bool(s_latest["Qualified"]) else "No")
         sc4.metric("SetupType", str(s_latest["SetupType"]) if str(s_latest["SetupType"]).strip() else "n/a")
@@ -520,7 +547,7 @@ def render_stock_details_tab() -> None:
                 s_recent[
                     [
                         "Week",
-                        "Health Score",
+                        "Production Score",
                         "Decision",
                         "Qualified",
                         "Rule_Alignment",
