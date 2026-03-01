@@ -1,12 +1,13 @@
 import numpy as np
 import pandas as pd
 
-from src.signals import swing_lifecycle_frame, swing_technical_snapshot
+from src.signals import build_swing_decision_trace, portfolio_lifecycle_frame, swing_lifecycle_frame
 
 
-def test_swing_lifecycle_frame_returns_production_score_series():
+def test_portfolio_and_swing_score_columns_are_separated():
     daily_idx = pd.date_range("2021-01-01", periods=260 * 5, freq="B")
     weekly_idx = pd.date_range("2021-01-01", periods=260, freq="W-FRI")
+    monthly_idx = pd.date_range("2018-01-31", periods=96, freq="M")
 
     stock_daily = pd.DataFrame(
         {
@@ -19,19 +20,24 @@ def test_swing_lifecycle_frame_returns_production_score_series():
     )
     stock_weekly = pd.DataFrame({"Close": np.linspace(45, 170, len(weekly_idx))}, index=weekly_idx)
     bench_weekly = pd.DataFrame({"Close": np.linspace(100, 220, len(weekly_idx))}, index=weekly_idx)
+    stock_monthly = pd.DataFrame(
+        {"Close": np.linspace(70, 240, len(monthly_idx))}, index=monthly_idx
+    )
 
-    out = swing_lifecycle_frame(
+    p = portfolio_lifecycle_frame(
+        stock_weekly=stock_weekly, stock_monthly=stock_monthly, bench_weekly=bench_weekly
+    )
+    s = swing_lifecycle_frame(
         stock_daily=stock_daily, stock_weekly=stock_weekly, bench_weekly=bench_weekly
     )
 
-    assert out.empty is False
-    assert "Production Score" in out.columns
-    non_na_scores = out["Production Score"].dropna()
-    assert non_na_scores.empty is False
-    assert non_na_scores.between(-1.0, 1.0).all()
+    assert "Health Score" in p.columns
+    assert "Production Score" not in p.columns
+    assert "Production Score" in s.columns
+    assert "Health Score" not in s.columns
 
 
-def test_swing_technical_snapshot_contains_core_indicators():
+def test_build_swing_decision_trace_contains_rules_and_score_name():
     daily_idx = pd.date_range("2021-01-01", periods=400, freq="B")
     weekly_idx = pd.date_range("2021-01-01", periods=230, freq="W-FRI")
 
@@ -47,11 +53,18 @@ def test_swing_technical_snapshot_contains_core_indicators():
     stock_weekly = pd.DataFrame({"Close": np.linspace(75, 150, len(weekly_idx))}, index=weekly_idx)
     bench_weekly = pd.DataFrame({"Close": np.linspace(90, 140, len(weekly_idx))}, index=weekly_idx)
 
-    snap = swing_technical_snapshot(
-        stock_daily=stock_daily, stock_weekly=stock_weekly, bench_weekly=bench_weekly
+    trace = build_swing_decision_trace(
+        stock_daily=stock_daily,
+        stock_weekly=stock_weekly,
+        bench_weekly=bench_weekly,
+        buy_threshold=0.3,
+        sell_threshold=-0.2,
+        signal_ticker="TEST",
+        benchmark="SPY",
+        name="Test Name",
     )
 
-    assert snap.empty is False
-    assert {"Indicator", "Value"}.issubset(snap.columns)
-    assert "Production Score" in set(snap["Indicator"])
-    assert "Weekly Qualified" in set(snap["Indicator"])
+    assert trace is not None
+    assert trace.score_name == "Production Score"
+    assert len(trace.rules) == 3
+    assert len(trace.components) == 7

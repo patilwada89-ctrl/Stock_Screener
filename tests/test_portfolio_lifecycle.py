@@ -16,9 +16,13 @@ def test_portfolio_lifecycle_frame_outputs_health_score_series():
 
     stock_weekly = pd.DataFrame({"Close": np.linspace(100, 220, len(weekly_idx))}, index=weekly_idx)
     bench_weekly = pd.DataFrame({"Close": np.linspace(90, 160, len(weekly_idx))}, index=weekly_idx)
-    stock_monthly = pd.DataFrame({"Close": np.linspace(70, 240, len(monthly_idx))}, index=monthly_idx)
+    stock_monthly = pd.DataFrame(
+        {"Close": np.linspace(70, 240, len(monthly_idx))}, index=monthly_idx
+    )
 
-    out = portfolio_lifecycle_frame(stock_weekly=stock_weekly, stock_monthly=stock_monthly, bench_weekly=bench_weekly)
+    out = portfolio_lifecycle_frame(
+        stock_weekly=stock_weekly, stock_monthly=stock_monthly, bench_weekly=bench_weekly
+    )
 
     assert out.empty is False
     assert "Health Score" in out.columns

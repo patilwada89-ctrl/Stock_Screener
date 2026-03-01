@@ -21,8 +21,8 @@ def test_load_universe_csv_accepts_semicolon_delimited_input():
 def test_load_universe_csv_maps_row_region_alias():
     raw = StringIO(
         "Name,Region,SignalTicker,TradeTicker_DE,Benchmark\n"
-        "\"ORIENT OVERS. NEW  DL-,10\",ROW,ORI1.F,ORI1,EXSA.DE\n"
-        "\"ALPHABET INC.CL.A DL-,001\",ROW,ABEA.F,ABEA,SPY\n"
+        '"ORIENT OVERS. NEW  DL-,10",ROW,ORI1.F,ORI1,EXSA.DE\n'
+        '"ALPHABET INC.CL.A DL-,001",ROW,ABEA.F,ABEA,SPY\n'
     )
 
     df = load_universe_csv(raw)

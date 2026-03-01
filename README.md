@@ -1,23 +1,11 @@
-# Snapshot-Only TA Stock Screener
+# Snapshot TA Screener (Streamlit)
 
-Streamlit app for technical-analysis screening using only current and recent candles (no forecasting model).
+A Streamlit app for snapshot-only technical analysis with three tabs:
+- `Portfolio`: long-term health tracking (`Health Score`)
+- `Swing`: momentum screening (`Production Score`) with `Action Board` and `Screener Table`
+- `Stock Details`: deep-dive for the currently selected stock from Portfolio/Swing
 
-The app has 3 tabs:
-- `Portfolio`: long-term portfolio health monitor
-- `Swing`: momentum swing screener with decision board
-- `Stock Details`: lifecycle + technical breakdown for the selected stock
-
-## What This Project Does
-
-- Loads stock universes from CSV (example file or upload).
-- Downloads price history from Yahoo Finance (`yfinance`).
-- Builds daily, weekly, and monthly frames.
-- Evaluates:
-  - Portfolio health score and risk flag.
-  - Swing weekly hard-filter qualification + production score.
-- Produces `Buy` / `Hold` / `Sell` decisions from adjustable thresholds.
-
-## Quick Start
+## Run
 
 ```bash
 python -m venv .venv
@@ -26,124 +14,74 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Input CSV Format
+## CSV schema
+
+Both `portfolio.csv` and `watchlist.csv` use the same schema.
 
 Required columns:
 - `Name`
-- `Region`
+- `Region` (`EU` or `US`; aliases like `ROW`, `WORLD`, `GLOBAL`, `DE`, `GERMANY` are auto-normalized)
 - `SignalTicker`
 
 Optional columns:
-- `TradeTicker_DE`
-- `Benchmark`
+- `TradeTicker_DE` (display-only identifier)
+- `Benchmark` (override benchmark; if empty it is inferred from region)
 
-Notes:
-- `Region` supports `EU` and `US` plus aliases such as `ROW`, `WORLD`, `GLOBAL`, `DE`, `GERMANY`, `USA`, etc.
-- If `Benchmark` is empty, it is inferred from region.
-- CSV delimiter is auto-detected, so both comma and semicolon exports are supported.
+Delimiter handling:
+- Loader auto-detects `,` and `;`.
 
-Example files:
-- `examples/portfolio.csv`
-- `examples/watchlist.csv`
-- `examples/xfra_swing_trading_universe.csv`
+Examples:
+- `/Users/ashish/vscode/Stock_Screener/examples/portfolio.csv`
+- `/Users/ashish/vscode/Stock_Screener/examples/watchlist.csv`
+- `/Users/ashish/vscode/Stock_Screener/examples/xfra_swing_trading_universe.csv`
 
-In the current UI:
-- Portfolio tab default uses `examples/portfolio.csv`
-- Swing tab default uses `examples/xfra_swing_trading_universe.csv`
+## Score definitions
 
-## Scoring Model Summary
+- `Health Score`:
+  - Portfolio-only score from monthly regime + weekly alignment + weekly RS + weekly momentum.
+- `Production Score`:
+  - Swing-only score from 7 daily momentum components.
+  - Used in Swing `Action Board`, Swing lifecycle, and Stock Details decision card.
 
-### Portfolio health score
-Portfolio score is normalized to `[-1, +1]` from:
-- Monthly regime (`Bull`, `Neutral`, `Bear`)
-- Weekly alignment (`Strong`, `Weak`, `Broken`)
-- Weekly relative-strength direction (`Rising` / `Falling`)
-- Weekly RSI momentum state
+## Key swing terms
 
-Risk flag is derived from regime/alignment/RS:
-- `Breakdown`
-- `Watch`
-- `OK`
+- `Qualified (Weekly)`: all weekly hard filters pass (`EMA20>EMA50>EMA200`, EMA20 slope positive, RS rising).
+- `SetupType`: `Breakout`, `Pullback`, or `Trend` from daily setup rules.
+- `Decision`: `Buy` / `Hold` / `Sell` from configurable thresholds.
 
-### Swing production score
-Only stocks passing weekly hard filter are scored:
-- `EMA20 > EMA50 > EMA200`
-- `EMA20[t] > EMA20[t-3]`
-- `RS_EMA20[t] > RS_EMA20[t-3]`
+## Stock Details workflow
 
-Qualified stocks receive an equal-weight production score in `[-1, +1]` from 7 daily components:
-- `RSI14_State`
-- `RSI_Accel`
-- `MACD_Hist_Sign`
-- `MACD_Hist_Accel`
-- `Price_vs_EMA20`
-- `Volume_Confirm`
-- `Volatility_Expansion`
+1. Click a row in Portfolio or Swing.
+2. Open `Stock Details` tab.
+3. Use `Prev` / `Next` to step through the active ranked list.
 
-The Swing tab also includes:
-- Action Board with threshold-based decision labels
-- Recently Lost Alignment list (default lookback: 6 weeks)
-- Weights Lab (custom ranking preview)
-
-## Decision Thresholds
-
-- Portfolio default thresholds: Sell `<= -0.25`, Buy `>= 0.35`
-- Swing default thresholds: Sell `<= -0.20`, Buy `>= 0.30`
-
-Thresholds are adjustable in the UI and reused by Stock Details where possible.
-
-## Data, Resampling, and Validation
-
-- Data source: `yfinance`
-- Download window: `5y`, interval `1d`
-- Price preference: `Adj Close` fallback to `Close`
-- Weekly bars: resampled to `W-FRI`
-- Monthly bars: resampled to month-end
-- Incomplete current period bars are dropped
-- Download cache uses Streamlit cache (`ttl=86400`)
-
-Minimum data requirements per ticker:
-- Weekly history: at least 210 bars
-- Monthly history: at least 24 bars
+`Stock Details` includes:
+- Swing decision card (Production Score, Decision, qualification, setup, risk + reason)
+- TradingView-style ratings blocks (Oscillators / Summary / Moving Averages)
+- Swing lifecycle chart with threshold lines and decision-change markers
+- Why-this-decision breakdown (weekly rule checks + daily component signals)
+- Latest indicators (concise table + advanced expander)
 
 ## Benchmarks
 
-Defaults in `src/config.py`:
-- US: `SPY`
-- EU: `EXSA.DE`
+- US default: `SPY`
+- EU default: `EXSA.DE`
 
-You can override benchmark per row in the CSV using the `Benchmark` column.
+Configure in `/Users/ashish/vscode/Stock_Screener/src/config.py`.
 
-## Project Structure
+## Debug mode
 
-```text
-app.py                  # Streamlit UI and tab rendering
-src/config.py           # constants (benchmarks, TTL, schema, sort order)
-src/data.py             # CSV loading, normalization, download, resampling
-src/indicators.py       # EMA/RSI/MACD/ATR/RS helpers
-src/signals.py          # screening logic, scoring, lifecycle frames
-src/ui_helpers.py       # file picker + table formatting helpers
-tests/                  # unit tests for core logic
-examples/               # sample CSV universes
-```
+Use sidebar `Debug mode` to inspect:
+- selected `DecisionTrace` JSON
+- date dtype/min/max diagnostics
+- intermediate values used by rules
 
-## Testing
+See `/Users/ashish/vscode/Stock_Screener/docs/debugging.md`.
+
+## Tests
 
 ```bash
 pytest
 ```
 
-Current test coverage includes:
-- CSV loading and region normalization
-- Weekly hard filter behavior
-- Monthly regime and lifecycle calculations
-- Score normalization bounds
-- Decision helper behavior
-
-## Common Issues
-
-- `Download failed or empty data`: usually invalid ticker, temporary Yahoo issue, or delisted symbol.
-- `Insufficient weekly history (<210 bars)` or `Insufficient monthly history`: ticker has too little history for model rules.
-- `Benchmark issue`: benchmark symbol is invalid or unavailable.
-
-Use the `Status / Excluded` section in Swing for filter failures and diagnostics.
+Current tests include rule checks, score naming separation, lifecycle/date prep, and loader compatibility.

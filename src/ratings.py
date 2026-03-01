@@ -86,7 +86,9 @@ def oscillator_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
     sig_rsi = 1 if pd.notna(rsi_v) and rsi_v < 30 else (-1 if pd.notna(rsi_v) and rsi_v > 70 else 0)
     sig_mom = _signal_from_value(mom_v, buy_if_above=0.0, sell_if_below=0.0)
     sig_ao = _signal_from_value(ao_v, buy_if_above=0.0, sell_if_below=0.0)
-    sig_cci = 1 if pd.notna(cci_v) and cci_v > 100 else (-1 if pd.notna(cci_v) and cci_v < -100 else 0)
+    sig_cci = (
+        1 if pd.notna(cci_v) and cci_v > 100 else (-1 if pd.notna(cci_v) and cci_v < -100 else 0)
+    )
     sig_stoch = 0
     if pd.notna(stoch_k_v) and pd.notna(stoch_d_v):
         if stoch_k_v < 20 and stoch_k_v > stoch_d_v:

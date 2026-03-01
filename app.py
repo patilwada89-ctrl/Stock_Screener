@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -9,9 +10,11 @@ import streamlit as st
 
 from src import config
 from src.data import fetch_ticker_data
+from src.decision_trace import DecisionTrace
 from src.ratings import screener_snapshot, technical_ratings
 from src.signals import (
     apply_custom_weights,
+    build_swing_decision_trace,
     daily_components,
     decision_from_health_score,
     decision_from_production_score,
@@ -20,14 +23,21 @@ from src.signals import (
     portfolio_lifecycle_frame,
     rank_qualified,
     sort_portfolio_for_risk,
-    swing_decision_snapshot,
     swing_lifecycle_frame,
     swing_technical_snapshot,
 )
-from src.ui_helpers import clean_display_df, pick_universe_df
+from src.ui_helpers import (
+    clean_display_df,
+    lifecycle_score_chart,
+    pick_universe_df,
+    prepare_lifecycle_frame,
+)
 
 st.set_page_config(page_title="Snapshot TA Screener", layout="wide")
 st.title("Snapshot-Only Technical-Analysis Stock Screener")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+logger = logging.getLogger("stock_screener.app")
+DEBUG_MODE = st.sidebar.checkbox("Debug mode", value=False, key="debug_mode")
 
 BASE_DIR = Path(__file__).resolve().parent
 EXAMPLES_DIR = BASE_DIR / "examples"
@@ -39,7 +49,9 @@ DATAFRAME_HAS_SELECTION = "on_select" in inspect.signature(st.dataframe).paramet
 
 
 def _build_data_cache(universe_df: pd.DataFrame) -> dict[str, object]:
-    all_tickers = set(universe_df["SignalTicker"].dropna().astype(str)) | set(universe_df["Benchmark"].dropna().astype(str))
+    all_tickers = set(universe_df["SignalTicker"].dropna().astype(str)) | set(
+        universe_df["Benchmark"].dropna().astype(str)
+    )
     cache: dict[str, object] = {}
     progress = st.progress(0.0, text="Downloading market data...")
     total = max(1, len(all_tickers))
@@ -48,6 +60,40 @@ def _build_data_cache(universe_df: pd.DataFrame) -> dict[str, object]:
         progress.progress(i / total, text=f"Downloaded {i}/{total}: {ticker}")
     progress.empty()
     return cache
+
+
+def _date_debug_info(df: pd.DataFrame, label: str) -> dict[str, object]:
+    if df.empty:
+        return {"label": label, "empty": True}
+    idx = pd.to_datetime(df.index, errors="coerce")
+    return {
+        "label": label,
+        "dtype": str(idx.dtype),
+        "min": str(idx.min()),
+        "max": str(idx.max()),
+        "rows": int(len(df)),
+        "is_monotonic": bool(idx.is_monotonic_increasing),
+    }
+
+
+def _render_debug_panel(
+    trace: DecisionTrace,
+    stock_daily: pd.DataFrame,
+    stock_weekly: pd.DataFrame,
+    bench_weekly: pd.DataFrame,
+) -> None:
+    if not DEBUG_MODE:
+        return
+    st.sidebar.markdown("### Debug: Selected Trace")
+    st.sidebar.json(trace.to_dict())
+    st.sidebar.markdown("### Debug: Date Diagnostics")
+    st.sidebar.json(
+        {
+            "stock_daily": _date_debug_info(stock_daily, "stock_daily"),
+            "stock_weekly": _date_debug_info(stock_weekly, "stock_weekly"),
+            "benchmark_weekly": _date_debug_info(bench_weekly, "benchmark_weekly"),
+        }
+    )
 
 
 def _coerce_threshold_pair(value: object, default: tuple[float, float]) -> tuple[float, float]:
@@ -74,6 +120,11 @@ def _set_selected_stock(row: pd.Series, source: str) -> None:
         "Benchmark": benchmark,
         "Status": str(row.get("Status", "")).strip(),
     }
+    logger.info(
+        "Selected stock updated: source=%s ticker=%s",
+        source,
+        st.session_state["selected_stock"]["SignalTicker"],
+    )
 
 
 def _store_ranked_context(source_df: pd.DataFrame, source_label: str) -> None:
@@ -203,9 +254,11 @@ def render_portfolio_tab() -> None:
         help="Decision rule: score <= sell threshold => Sell, score >= buy threshold => Buy, otherwise Hold.",
     )
     out["Decision"] = out.apply(
-        lambda r: decision_from_health_score(float(r["Health Score"]), buy_threshold, sell_threshold)
-        if r["Status"] == "OK"
-        else "No Data",
+        lambda r: (
+            decision_from_health_score(float(r["Health Score"]), buy_threshold, sell_threshold)
+            if r["Status"] == "OK"
+            else "No Data"
+        ),
         axis=1,
     )
 
@@ -281,11 +334,26 @@ def render_portfolio_tab() -> None:
     lifecycle["Decision"] = lifecycle["Health Score"].apply(
         lambda v: decision_from_health_score(float(v), buy_threshold, sell_threshold)
     )
-
-    p_chart = lifecycle[["Health Score"]].copy()
-    p_chart["Buy Threshold"] = buy_threshold
-    p_chart["Sell Threshold"] = sell_threshold
-    st.line_chart(p_chart, use_container_width=True)
+    p_chart_df = prepare_lifecycle_frame(
+        lifecycle=lifecycle,
+        score_col="Health Score",
+        decision_col="Decision",
+        window=104,
+    )
+    p_chart = lifecycle_score_chart(
+        lifecycle_df=p_chart_df.set_index("Date"),
+        score_col="Health Score",
+        decision_col="Decision",
+        buy_threshold=buy_threshold,
+        sell_threshold=sell_threshold,
+    )
+    if p_chart is None:
+        fallback = p_chart_df[["Date", "Health Score"]].set_index("Date")
+        fallback["Buy Threshold"] = buy_threshold
+        fallback["Sell Threshold"] = sell_threshold
+        st.line_chart(fallback, use_container_width=True)
+    else:
+        st.altair_chart(p_chart, use_container_width=True)
 
     latest = lifecycle.iloc[-1]
     c1, c2, c3, c4 = st.columns(4)
@@ -347,7 +415,7 @@ def render_swing_tab() -> None:
         rows.append(row)
 
     swing_df = pd.DataFrame(rows)
-    qualified = swing_df[(swing_df["Qualified"] == True) & (swing_df["Status"] == "OK")].copy()  # noqa: E712
+    qualified = swing_df[swing_df["Qualified"] & (swing_df["Status"] == "OK")].copy()
     qualified = rank_qualified(qualified)
     view_mode = st.radio(
         "View",
@@ -433,7 +501,9 @@ def render_swing_tab() -> None:
                     "Volatility_Expansion",
                     "Status",
                 ]
-                st.dataframe(clean_display_df(qualified[q_cols]), use_container_width=True, hide_index=True)
+                st.dataframe(
+                    clean_display_df(qualified[q_cols]), use_container_width=True, hide_index=True
+                )
     else:
         screener_rows = []
         swing_lookup = {str(r["SignalTicker"]): r for _, r in swing_df.iterrows()}
@@ -578,7 +648,9 @@ def render_swing_tab() -> None:
                 "CustomScore",
                 "SetupType",
             ]
-            st.dataframe(clean_display_df(custom[custom_cols]), use_container_width=True, hide_index=True)
+            st.dataframe(
+                clean_display_df(custom[custom_cols]), use_container_width=True, hide_index=True
+            )
 
     with st.expander("Status / Excluded", expanded=False):
         status_cols = [
@@ -596,7 +668,9 @@ def render_swing_tab() -> None:
         for col in status_cols:
             if col not in swing_df.columns:
                 swing_df[col] = pd.NA
-        st.dataframe(clean_display_df(swing_df[status_cols]), use_container_width=True, hide_index=True)
+        st.dataframe(
+            clean_display_df(swing_df[status_cols]), use_container_width=True, hide_index=True
+        )
 
 
 def render_stock_details_tab() -> None:
@@ -609,7 +683,11 @@ def render_stock_details_tab() -> None:
     ranked_tickers = st.session_state.get("selected_ranked_tickers", [])
     ranked_meta = st.session_state.get("selected_ranked_meta", {})
     current_ticker = str(selected.get("SignalTicker", "")).strip()
-    if isinstance(ranked_tickers, list) and current_ticker in ranked_tickers and len(ranked_tickers) > 1:
+    if (
+        isinstance(ranked_tickers, list)
+        and current_ticker in ranked_tickers
+        and len(ranked_tickers) > 1
+    ):
         idx = ranked_tickers.index(current_ticker)
         nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
         with nav_col1:
@@ -617,7 +695,9 @@ def render_stock_details_tab() -> None:
         with nav_col2:
             st.caption(f"Ranked item {idx + 1} of {len(ranked_tickers)}")
         with nav_col3:
-            next_clicked = st.button("Next", disabled=idx >= len(ranked_tickers) - 1, key="stock_details_next")
+            next_clicked = st.button(
+                "Next", disabled=idx >= len(ranked_tickers) - 1, key="stock_details_next"
+            )
 
         if prev_clicked or next_clicked:
             new_idx = idx - 1 if prev_clicked else idx + 1
@@ -633,7 +713,9 @@ def render_stock_details_tab() -> None:
                     "Status": meta.get("Status", ""),
                 }
             )
-            _set_selected_stock(row, str(st.session_state.get("selected_ranked_source", selected.get("Source", ""))))
+            _set_selected_stock(
+                row, str(st.session_state.get("selected_ranked_source", selected.get("Source", "")))
+            )
             st.rerun()
 
     signal_ticker = str(selected.get("SignalTicker", "")).strip()
@@ -674,25 +756,31 @@ def render_stock_details_tab() -> None:
         key="stock_details_swing_thresholds",
     )
 
-    decision_snapshot = swing_decision_snapshot(
+    trace = build_swing_decision_trace(
         stock_daily=stock.daily,
         stock_weekly=stock.weekly,
         bench_weekly=bench.weekly,
         buy_threshold=s_buy,
         sell_threshold=s_sell,
+        signal_ticker=signal_ticker,
+        benchmark=benchmark_ticker,
+        name=str(selected.get("Name", signal_ticker)),
     )
-    if decision_snapshot.get("status") != "OK":
-        st.info(f"Decision snapshot unavailable: {decision_snapshot.get('status', 'n/a')}")
+    if trace is None:
+        st.info("Decision snapshot unavailable for this stock.")
         return
+    _render_debug_panel(
+        trace=trace, stock_daily=stock.daily, stock_weekly=stock.weekly, bench_weekly=bench.weekly
+    )
 
     dc1, dc2, dc3, dc4, dc5, dc6 = st.columns(6)
-    dc1.metric("Production Score", f"{float(decision_snapshot['production_score']):.4f}")
-    dc2.metric("Decision", str(decision_snapshot["decision"]))
-    dc3.metric("Qualified (Weekly)", "Yes" if bool(decision_snapshot["weekly_qualified"]) else "No")
-    dc4.metric("SetupType", str(decision_snapshot["setup_type"]))
-    dc5.metric("Risk Flag", str(decision_snapshot["risk_flag"]))
+    dc1.metric("Production Score", f"{float(trace.score):.4f}")
+    dc2.metric("Decision", str(trace.decision))
+    dc3.metric("Qualified (Weekly)", "Yes" if bool(trace.qualified) else "No")
+    dc4.metric("SetupType", str(trace.setup_type))
+    dc5.metric("Risk Flag", str(trace.risk_flag))
     dc6.metric("Thresholds", f"Sell {s_sell:.2f} / Buy {s_buy:.2f}")
-    st.caption(f"Risk reason: {decision_snapshot['risk_reason']}")
+    st.caption(f"Risk reason: {trace.risk_reason}")
 
     st.markdown("### Technical Ratings")
     ratings = technical_ratings(stock.daily)
@@ -718,11 +806,15 @@ def render_stock_details_tab() -> None:
     why_left, why_right = st.columns(2)
     with why_left:
         st.caption("Weekly hard filter checks")
-        weekly_rules_df = pd.DataFrame(decision_snapshot["weekly_rules"])
+        weekly_rules_df = pd.DataFrame(
+            [{"Rule": r.name, "Pass": r.passed, "Value": r.value} for r in trace.rules]
+        )
         st.dataframe(clean_display_df(weekly_rules_df), use_container_width=True, hide_index=True)
     with why_right:
         st.caption("Daily component signals")
-        components_df = pd.DataFrame(decision_snapshot["component_signals"])
+        components_df = pd.DataFrame(
+            [{"Component": c.name, "Signal": c.signal, "Value": c.value} for c in trace.components]
+        )
         st.dataframe(clean_display_df(components_df), use_container_width=True, hide_index=True)
 
     st.markdown("### Swing Lifecycle & Technicals")
@@ -737,21 +829,46 @@ def render_stock_details_tab() -> None:
     else:
         swing_lifecycle = swing_lifecycle.copy()
         swing_lifecycle["Decision"] = swing_lifecycle["Production Score"].apply(
-            lambda v: decision_from_production_score(float(v), s_buy, s_sell) if pd.notna(v) else "No Signal"
+            lambda v: (
+                decision_from_production_score(float(v), s_buy, s_sell)
+                if pd.notna(v)
+                else "No Signal"
+            )
         )
 
-        s_chart = swing_lifecycle[["Production Score"]].copy()
-        s_chart["Buy Threshold"] = s_buy
-        s_chart["Sell Threshold"] = s_sell
-        st.line_chart(s_chart, use_container_width=True)
+        s_chart_df = prepare_lifecycle_frame(
+            lifecycle=swing_lifecycle,
+            score_col="Production Score",
+            decision_col="Decision",
+            window=104,
+        )
+        s_chart = lifecycle_score_chart(
+            lifecycle_df=s_chart_df.set_index("Date"),
+            score_col="Production Score",
+            decision_col="Decision",
+            buy_threshold=s_buy,
+            sell_threshold=s_sell,
+        )
+        if s_chart is None:
+            s_fallback = s_chart_df[["Date", "Production Score"]].set_index("Date")
+            s_fallback["Buy Threshold"] = s_buy
+            s_fallback["Sell Threshold"] = s_sell
+            st.line_chart(s_fallback, use_container_width=True)
+        else:
+            st.altair_chart(s_chart, use_container_width=True)
 
         s_latest = swing_lifecycle.iloc[-1]
         s_latest_score = s_latest["Production Score"]
         sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("Latest Production Score", f"{s_latest_score:.4f}" if pd.notna(s_latest_score) else "n/a")
+        sc1.metric(
+            "Latest Production Score",
+            f"{s_latest_score:.4f}" if pd.notna(s_latest_score) else "n/a",
+        )
         sc2.metric("Decision", str(s_latest["Decision"]))
         sc3.metric("Qualified (Weekly)", "Yes" if bool(s_latest["Qualified"]) else "No")
-        sc4.metric("SetupType", str(s_latest["SetupType"]) if str(s_latest["SetupType"]).strip() else "n/a")
+        sc4.metric(
+            "SetupType", str(s_latest["SetupType"]) if str(s_latest["SetupType"]).strip() else "n/a"
+        )
 
         s_recent = swing_lifecycle.tail(26).copy()
         s_recent.insert(0, "Week", s_recent.index)
@@ -791,21 +908,23 @@ def render_stock_details_tab() -> None:
     if technicals.empty:
         st.info("Technical snapshot unavailable for this stock.")
     else:
-        concise = technicals[technicals["Indicator"].isin(
-            [
-                "Production Score",
-                "SetupType",
-                "Weekly Qualified",
-                "Rule Alignment",
-                "Rule EMA20 Slope",
-                "Rule RS Rising",
-                "1D Close",
-                "1D RSI14",
-                "1D MACD Histogram",
-                "1D EMA20",
-                "1D ATR14%",
-            ]
-        )]
+        concise = technicals[
+            technicals["Indicator"].isin(
+                [
+                    "Production Score",
+                    "SetupType",
+                    "Weekly Qualified",
+                    "Rule Alignment",
+                    "Rule EMA20 Slope",
+                    "Rule RS Rising",
+                    "1D Close",
+                    "1D RSI14",
+                    "1D MACD Histogram",
+                    "1D EMA20",
+                    "1D ATR14%",
+                ]
+            )
+        ]
         st.dataframe(clean_display_df(concise), use_container_width=True, hide_index=True)
         with st.expander("Show advanced indicators", expanded=False):
             st.dataframe(clean_display_df(technicals), use_container_width=True, hide_index=True)

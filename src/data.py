@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import io
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
@@ -14,6 +14,7 @@ from src import config
 try:
     import streamlit as st
 except Exception:  # pragma: no cover - enables unit tests without streamlit installed
+
     class _DummyStreamlit:
         @staticmethod
         def cache_data(*_args, **_kwargs):
@@ -95,7 +96,9 @@ def load_universe_csv(source: str | Path | BinaryIO) -> pd.DataFrame:
 
     invalid_regions = sorted(set(df.loc[~df["Region"].isin(["US", "EU"]), "Region"].tolist()))
     if invalid_regions:
-        raise ValueError(f"Invalid Region values: {', '.join(invalid_regions)}. Use EU/US (aliases like ROW are auto-mapped).")
+        raise ValueError(
+            f"Invalid Region values: {', '.join(invalid_regions)}. Use EU/US (aliases like ROW are auto-mapped)."
+        )
 
     df = df[df["SignalTicker"] != ""].reset_index(drop=True)
     df["Benchmark"] = df.apply(resolve_benchmark, axis=1)
@@ -134,7 +137,9 @@ def download_history(ticker: str) -> pd.DataFrame:
     raw = raw.sort_index()
     raw.index = pd.to_datetime(raw.index).tz_localize(None)
 
-    price_col = "Adj Close" if "Adj Close" in raw.columns and raw["Adj Close"].notna().any() else "Close"
+    price_col = (
+        "Adj Close" if "Adj Close" in raw.columns and raw["Adj Close"].notna().any() else "Close"
+    )
 
     out = pd.DataFrame(index=raw.index)
     out["Open"] = raw["Open"] if "Open" in raw.columns else pd.NA
@@ -198,7 +203,13 @@ def to_monthly(df_daily: pd.DataFrame) -> pd.DataFrame:
 def fetch_ticker_data(ticker: str) -> TickerData:
     daily = download_history(ticker)
     if daily.empty:
-        return TickerData(ticker=ticker, daily=daily, weekly=pd.DataFrame(), monthly=pd.DataFrame(), status="Download failed or empty data")
+        return TickerData(
+            ticker=ticker,
+            daily=daily,
+            weekly=pd.DataFrame(),
+            monthly=pd.DataFrame(),
+            status="Download failed or empty data",
+        )
 
     weekly = to_weekly(daily)
     monthly = to_monthly(daily)
