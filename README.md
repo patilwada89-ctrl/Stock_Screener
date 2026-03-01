@@ -5,6 +5,13 @@ A Streamlit app for snapshot-only technical analysis with three tabs:
 - `Swing`: momentum screening (`Production Score`) with `Action Board` and `Screener Table`
 - `Stock Details`: deep-dive for the currently selected stock from Portfolio/Swing
 
+## Context Pack (Read First)
+
+- Agent/contributor guide: `/Users/ashish/vscode/Stock_Screener/AGENTS.md`
+- Project context: `/Users/ashish/vscode/Stock_Screener/docs/context.md`
+- Architecture/dataflow: `/Users/ashish/vscode/Stock_Screener/docs/overview.md`
+- Module contracts: `/Users/ashish/vscode/Stock_Screener/docs/api.md`
+
 ## Run
 
 ```bash

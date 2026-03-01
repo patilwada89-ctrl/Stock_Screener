@@ -1,0 +1,6 @@
+Read AGENTS.md first.
+Read docs/context.md before editing.
+Keep Streamlit code in app.py only.
+No streamlit imports in src/.
+Prefer pure, testable functions in src/.
+Update docs when behavior/API changes.
