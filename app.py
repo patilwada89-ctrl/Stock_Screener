@@ -76,6 +76,29 @@ def _set_selected_stock(row: pd.Series, source: str) -> None:
     }
 
 
+def _store_ranked_context(source_df: pd.DataFrame, source_label: str) -> None:
+    if source_df.empty or "SignalTicker" not in source_df.columns:
+        return
+
+    ranked_tickers = [str(t) for t in source_df["SignalTicker"].astype(str).tolist()]
+    ranked_meta: dict[str, dict[str, str]] = {}
+    for _, r in source_df.iterrows():
+        ticker = str(r.get("SignalTicker", "")).strip()
+        if not ticker:
+            continue
+        ranked_meta[ticker] = {
+            "Name": str(r.get("Name", "")).strip(),
+            "Region": str(r.get("Region", "")).upper().strip(),
+            "TradeTicker_DE": str(r.get("TradeTicker_DE", "")).strip(),
+            "Benchmark": str(r.get("Benchmark", "")).strip(),
+            "Status": str(r.get("Status", "")).strip(),
+        }
+
+    st.session_state["selected_ranked_tickers"] = ranked_tickers
+    st.session_state["selected_ranked_meta"] = ranked_meta
+    st.session_state["selected_ranked_source"] = source_label
+
+
 def _render_selectable_stock_table(
     source_df: pd.DataFrame,
     display_df: pd.DataFrame,
@@ -112,6 +135,7 @@ def _render_selectable_stock_table(
         if selected_row != previous_row:
             st.session_state[last_row_key] = selected_row
             if isinstance(selected_row, int) and 0 <= selected_row < len(source_df):
+                _store_ranked_context(source_df, source_label)
                 _set_selected_stock(source_df.iloc[selected_row], source_label)
 
         st.caption("Click a row to open it in the Stock Details tab.")
@@ -131,6 +155,7 @@ def _render_selectable_stock_table(
     if selected and selected != previous_selected:
         st.session_state[fallback_last_key] = selected
         picked = source_df[source_df["SignalTicker"] == selected].iloc[0]
+        _store_ranked_context(source_df, source_label)
         _set_selected_stock(picked, source_label)
 
 
@@ -360,6 +385,9 @@ def render_swing_tab() -> None:
             qualified["Decision"] = qualified["ProductionScore"].apply(
                 lambda s: decision_from_production_score(float(s), buy_threshold, sell_threshold)
             )
+            if "selected_stock" not in st.session_state:
+                _store_ranked_context(qualified, "Swing")
+                _set_selected_stock(qualified.iloc[0], "Swing")
             summary = qualified["Decision"].value_counts().to_dict()
             c1, c2, c3 = st.columns(3)
             c1.metric("Buy", int(summary.get("Buy", 0)))
@@ -467,6 +495,9 @@ def render_swing_tab() -> None:
                 ascending=[False, False],
                 na_position="last",
             ).reset_index(drop=True)
+            if "selected_stock" not in st.session_state:
+                _store_ranked_context(screener_df, "Swing")
+                _set_selected_stock(screener_df.iloc[0], "Swing")
             screener_cols = [
                 "Name",
                 "Region",
@@ -574,6 +605,36 @@ def render_stock_details_tab() -> None:
     if not selected:
         st.info("Click a row in Portfolio or Swing Action Board to load stock details here.")
         return
+
+    ranked_tickers = st.session_state.get("selected_ranked_tickers", [])
+    ranked_meta = st.session_state.get("selected_ranked_meta", {})
+    current_ticker = str(selected.get("SignalTicker", "")).strip()
+    if isinstance(ranked_tickers, list) and current_ticker in ranked_tickers and len(ranked_tickers) > 1:
+        idx = ranked_tickers.index(current_ticker)
+        nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
+        with nav_col1:
+            prev_clicked = st.button("Prev", disabled=idx <= 0, key="stock_details_prev")
+        with nav_col2:
+            st.caption(f"Ranked item {idx + 1} of {len(ranked_tickers)}")
+        with nav_col3:
+            next_clicked = st.button("Next", disabled=idx >= len(ranked_tickers) - 1, key="stock_details_next")
+
+        if prev_clicked or next_clicked:
+            new_idx = idx - 1 if prev_clicked else idx + 1
+            new_ticker = str(ranked_tickers[new_idx])
+            meta = ranked_meta.get(new_ticker, {})
+            row = pd.Series(
+                {
+                    "Name": meta.get("Name", new_ticker),
+                    "Region": meta.get("Region", selected.get("Region", "")),
+                    "SignalTicker": new_ticker,
+                    "TradeTicker_DE": meta.get("TradeTicker_DE", ""),
+                    "Benchmark": meta.get("Benchmark", selected.get("Benchmark", "")),
+                    "Status": meta.get("Status", ""),
+                }
+            )
+            _set_selected_stock(row, str(st.session_state.get("selected_ranked_source", selected.get("Source", ""))))
+            st.rerun()
 
     signal_ticker = str(selected.get("SignalTicker", "")).strip()
     benchmark_ticker = str(selected.get("Benchmark", "")).strip()
