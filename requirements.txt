@@ -4,8 +4,10 @@
 #
 #    pip-compile --output-file=requirements.txt requirements.in
 #
-altair==6.0.0
-    # via streamlit
+altair==4.2.2
+    # via
+    #   -r requirements.in
+    #   streamlit
 attrs==25.4.0
     # via
     #   jsonschema
@@ -28,6 +30,8 @@ click==8.1.8
     # via streamlit
 curl-cffi==0.13.0
     # via yfinance
+entrypoints==0.4
+    # via altair
 frozendict==2.4.7
     # via yfinance
 gitdb==4.0.12
@@ -54,22 +58,20 @@ mdurl==0.1.2
     # via markdown-it-py
 multitasking==0.0.12
     # via yfinance
-narwhals==2.17.0
-    # via altair
 numpy==2.0.2
     # via
     #   -r requirements.in
+    #   altair
     #   pandas
     #   pydeck
     #   streamlit
     #   yfinance
 packaging==26.0
-    # via
-    #   altair
-    #   streamlit
+    # via streamlit
 pandas==2.3.3
     # via
     #   -r requirements.in
+    #   altair
     #   streamlit
     #   yfinance
 peewee==4.0.1
@@ -126,11 +128,12 @@ streamlit==1.12.0
     # via -r requirements.in
 toml==0.10.2
     # via streamlit
+toolz==1.1.0
+    # via altair
 tornado==6.5.4
     # via streamlit
 typing-extensions==4.15.0
     # via
-    #   altair
     #   beautifulsoup4
     #   gitpython
     #   referencing
