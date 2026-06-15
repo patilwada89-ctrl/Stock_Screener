@@ -30,6 +30,7 @@ from src.ui_helpers import (
     clean_display_df,
     lifecycle_score_chart,
     prepare_lifecycle_frame,
+    price_decision_chart,
 )
 
 st.set_page_config(page_title="Snapshot TA Screener", layout="wide")
@@ -595,6 +596,20 @@ def render_portfolio_tab() -> None:
         buy_threshold=buy_threshold,
         sell_threshold=sell_threshold,
     )
+    p_price_chart = price_decision_chart(
+        price_df=getattr(stock, "weekly", pd.DataFrame()),
+        lifecycle_df=p_chart_df,
+        decision_col="Decision",
+        window=104,
+    )
+    st.caption("Weekly price with Buy/Sell decision-change markers")
+    if p_price_chart is None:
+        p_price_fallback = getattr(stock, "weekly", pd.DataFrame()).tail(104)[["Close"]]
+        st.line_chart(p_price_fallback, use_container_width=True)
+    else:
+        st.altair_chart(p_price_chart, use_container_width=True)
+
+    st.caption("Lifecycle score chart")
     if p_chart is None:
         fallback = p_chart_df[["Date", "Health Score"]].set_index("Date")
         fallback["Buy Threshold"] = buy_threshold
@@ -1131,6 +1146,20 @@ def render_stock_details_tab() -> None:
             buy_threshold=s_buy,
             sell_threshold=s_sell,
         )
+        s_price_chart = price_decision_chart(
+            price_df=stock.weekly,
+            lifecycle_df=s_chart_df,
+            decision_col="Decision",
+            window=104,
+        )
+        st.caption("Weekly price with Buy/Sell decision-change markers")
+        if s_price_chart is None:
+            s_price_fallback = stock.weekly.tail(104)[["Close"]]
+            st.line_chart(s_price_fallback, use_container_width=True)
+        else:
+            st.altair_chart(s_price_chart, use_container_width=True)
+
+        st.caption("Lifecycle score chart")
         if s_chart is None:
             s_fallback = s_chart_df[["Date", "Production Score"]].set_index("Date")
             s_fallback["Buy Threshold"] = s_buy
