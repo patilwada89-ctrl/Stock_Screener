@@ -9,7 +9,7 @@ import pandas as pd
 
 from src import config
 from src.decision_trace import ComponentTrace, DecisionTrace, RuleTrace
-from src.indicators import atr_percent, ema, macd_hist, relative_strength, rsi, sma
+from src.indicators import atr, atr_percent, ema, macd_hist, relative_strength, rsi, sma
 
 
 def classify_monthly_regime(close_t: float, ema20_t: float, ema20_t_3: float) -> str:
@@ -59,6 +59,20 @@ def normalize_score(values: list[float]) -> float:
     if not values:
         return 0.0
     score = float(np.mean(values))
+    return float(np.clip(score, -1.0, 1.0))
+
+
+def production_score_from_components(components: dict[str, int]) -> float:
+    """Weighted Production Score using equal factor families.
+
+    The four Momentum signals share a single 25% family (6.25% each); Trend,
+    Volume, and Volatility each get their own 25%. This stops the collinear
+    momentum oscillators from dominating an equal-weight-of-seven average.
+    Weights sum to 1.0 and each component is in [-1, 1], so the result is too;
+    the clip is defensive only.
+    """
+    weights = config.PRODUCTION_COMPONENT_WEIGHTS
+    score = sum(float(weights[name]) * float(components.get(name, 0)) for name in weights)
     return float(np.clip(score, -1.0, 1.0))
 
 
@@ -187,25 +201,35 @@ def daily_components(daily_df: pd.DataFrame) -> dict[str, Any]:
 
     vol_t = volume.iloc[t] if len(volume) else np.nan
     vol_sma_t = vol_sma20.iloc[t] if len(vol_sma20) else np.nan
-    volume_confirm = 1 if pd.notna(vol_t) and pd.notna(vol_sma_t) and vol_t > vol_sma_t else 0
+    close_prev = float(close.iloc[t - 1]) if len(close) >= 2 else np.nan
+    # Direction-gated: above-average volume confirms the day's direction.
+    # High volume on an up day -> +1, on a down day -> -1; quiet days -> 0.
+    high_volume = pd.notna(vol_t) and pd.notna(vol_sma_t) and vol_t > vol_sma_t
+    if not high_volume or pd.isna(close_prev) or pd.isna(close_t):
+        volume_confirm = 0
+    elif close_t > close_prev:
+        volume_confirm = 1
+    elif close_t < close_prev:
+        volume_confirm = -1
+    else:
+        volume_confirm = 0
 
     atr_pct_t = atr14_pct.iloc[t]
     atr_pct_sma_t = atr14_pct_sma20.iloc[t]
-    volatility_expansion = (
-        1 if pd.notna(atr_pct_t) and pd.notna(atr_pct_sma_t) and atr_pct_t > atr_pct_sma_t else 0
-    )
+    # Symmetric vs its SMA20: expanding range -> +1, contracting -> -1.
+    volatility_expansion = _component_acceleration(atr_pct_t, atr_pct_sma_t)
 
-    values = [
-        rsi_state,
-        rsi_accel,
-        macd_sign,
-        macd_accel,
-        price_vs_ema20,
-        volume_confirm,
-        volatility_expansion,
-    ]
+    component_signals = {
+        "RSI14_State": rsi_state,
+        "RSI_Accel": rsi_accel,
+        "MACD_Hist_Sign": macd_sign,
+        "MACD_Hist_Accel": macd_accel,
+        "Price_vs_EMA20": price_vs_ema20,
+        "Volume_Confirm": volume_confirm,
+        "Volatility_Expansion": volatility_expansion,
+    }
 
-    score = normalize_score(values)
+    score = production_score_from_components(component_signals)
 
     close_20h = float(high20_prev.iloc[t]) if pd.notna(high20_prev.iloc[t]) else np.nan
     breakout = pd.notna(close_20h) and close_t > close_20h
@@ -227,15 +251,7 @@ def daily_components(daily_df: pd.DataFrame) -> dict[str, Any]:
         "status": "OK",
         "score": score,
         "setup_type": setup_type,
-        "components": {
-            "RSI14_State": rsi_state,
-            "RSI_Accel": rsi_accel,
-            "MACD_Hist_Sign": macd_sign,
-            "MACD_Hist_Accel": macd_accel,
-            "Price_vs_EMA20": price_vs_ema20,
-            "Volume_Confirm": volume_confirm,
-            "Volatility_Expansion": volatility_expansion,
-        },
+        "components": component_signals,
         "values": {
             "Close": close_t,
             "RSI14": float(rsi14.iloc[t]),
@@ -506,31 +522,37 @@ def build_swing_decision_trace(
         ),
     ]
 
+    cw = config.PRODUCTION_COMPONENT_WEIGHTS
     components = [
         ComponentTrace(
             name="RSI14 State",
             signal=int(comps["RSI14_State"]),
             value=f"RSI14={values['RSI14']:.2f}",
+            weight=cw["RSI14_State"],
         ),
         ComponentTrace(
             name="RSI Acceleration",
             signal=int(comps["RSI_Accel"]),
             value=f"RSI14={values['RSI14']:.2f}",
+            weight=cw["RSI_Accel"],
         ),
         ComponentTrace(
             name="MACD Histogram Sign",
             signal=int(comps["MACD_Hist_Sign"]),
             value=f"Hist={values['MACD_Hist']:.4f}",
+            weight=cw["MACD_Hist_Sign"],
         ),
         ComponentTrace(
             name="MACD Histogram Acceleration",
             signal=int(comps["MACD_Hist_Accel"]),
             value=f"Hist={values['MACD_Hist']:.4f}",
+            weight=cw["MACD_Hist_Accel"],
         ),
         ComponentTrace(
             name="Price vs EMA20",
             signal=int(comps["Price_vs_EMA20"]),
             value=f"Close={values['Close']:.3f}, EMA20={values['EMA20_D']:.3f}",
+            weight=cw["Price_vs_EMA20"],
         ),
         ComponentTrace(
             name="Volume Confirmation",
@@ -540,6 +562,7 @@ def build_swing_decision_trace(
                 if pd.notna(values["Volume"]) and pd.notna(values["Volume_SMA20"])
                 else "Volume data missing"
             ),
+            weight=cw["Volume_Confirm"],
         ),
         ComponentTrace(
             name="Volatility Expansion",
@@ -549,6 +572,7 @@ def build_swing_decision_trace(
                 if pd.notna(values["ATR14_Pct"]) and pd.notna(values["ATR14_Pct_SMA20"])
                 else "ATR data missing"
             ),
+            weight=cw["Volatility_Expansion"],
         ),
     ]
 
@@ -737,6 +761,73 @@ def swing_technical_snapshot(
     )
 
     return pd.DataFrame(rows)
+
+
+def _build_stop_row(
+    label: str,
+    entry: float,
+    stop: float,
+    r_multiples: tuple[float, ...],
+) -> dict[str, Any]:
+    risk = entry - stop
+    valid = pd.notna(stop) and pd.notna(entry) and risk > 0
+    row: dict[str, Any] = {
+        "type": label,
+        "stop": float(stop) if pd.notna(stop) else np.nan,
+        "risk_per_share": float(risk) if valid else np.nan,
+        "risk_pct": float(risk / entry) if valid and entry else np.nan,
+        "targets": {},
+    }
+    for r in r_multiples:
+        row["targets"][f"{r:g}R"] = float(entry + r * risk) if valid else np.nan
+    return row
+
+
+def swing_trade_levels(
+    daily_df: pd.DataFrame,
+    atr_mult: float = 2.0,
+    swing_lookback: int = 10,
+    r_multiples: tuple[float, ...] = (1.0, 2.0, 3.0),
+) -> dict[str, Any]:
+    """Deterministic stop and R-multiple target levels for a swing entry.
+
+    Computes two stop candidates from the latest completed daily candle: an
+    ATR(14)-multiple stop and a swing-low (lowest low over ``swing_lookback``
+    bars) stop. For each, reports risk-per-share and the requested R-multiple
+    targets. This is pure price/ATR arithmetic, not position sizing or advice.
+    """
+    if daily_df.empty or "Close" not in daily_df.columns:
+        return {"status": "No daily price data"}
+    if len(daily_df) < 20:
+        return {"status": "Insufficient daily history (<20 bars)"}
+
+    close = daily_df["Close"]
+    high = daily_df["High"] if "High" in daily_df.columns else close
+    low = daily_df["Low"] if "Low" in daily_df.columns else close
+
+    atr14 = atr(high, low, close, 14)
+    entry = float(close.iloc[-1])
+    atr_t = float(atr14.iloc[-1]) if pd.notna(atr14.iloc[-1]) else np.nan
+    if pd.isna(entry) or pd.isna(atr_t):
+        return {"status": "ATR or price unavailable"}
+
+    atr_stop = entry - float(atr_mult) * atr_t
+    swing_low = float(low.tail(swing_lookback).min())
+
+    stops = [
+        _build_stop_row(f"ATR ({atr_mult:g}x)", entry, atr_stop, r_multiples),
+        _build_stop_row(f"Swing low ({swing_lookback}d)", entry, swing_low, r_multiples),
+    ]
+
+    return {
+        "status": "OK",
+        "entry": entry,
+        "atr14": atr_t,
+        "atr_mult": float(atr_mult),
+        "swing_lookback": int(swing_lookback),
+        "r_multiples": [float(r) for r in r_multiples],
+        "stops": stops,
+    }
 
 
 def portfolio_lifecycle_frame(

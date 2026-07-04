@@ -22,16 +22,33 @@ Must pass all:
 - `RS_EMA20_week[t] > RS_EMA20_week[t-3]`
 
 ### Production Score components (daily)
-Equal-weight components in `[-1,0,+1]` (with some confirmation-only `0/+1`):
+Seven signals, each in `[-1, 0, +1]`:
 - RSI14 state
 - RSI acceleration
 - MACD histogram sign
 - MACD histogram acceleration
 - Price vs EMA20
-- Volume confirmation
-- Volatility expansion (ATR14% vs SMA20)
+- Volume confirmation — direction-gated: above-average volume scores `+1` on an up
+  day, `-1` on a down day, and `0` when volume is below average (quiet days do not vote).
+- Volatility expansion — `ATR14%` vs its `SMA20`, symmetric: `+1` expanding, `-1` contracting.
 
-Production Score is normalized to `[-1, +1]`.
+These are combined by **four equal factor families** (25% each) rather than a flat
+average, so the collinear momentum oscillators cannot dominate:
+- Momentum (25%): RSI state, RSI accel, MACD sign, MACD accel — averaged within the
+  family (`6.25%` each)
+- Trend (25%): Price vs EMA20
+- Volume (25%): Volume confirmation
+- Volatility (25%): Volatility expansion
+
+Weights live in `config.PRODUCTION_COMPONENT_WEIGHTS` and are applied by
+`production_score_from_components`. Weights sum to `1.0` and every component is in
+`[-1, 1]`, so Production Score stays in `[-1, +1]`.
+
+### Trade levels (Stock Details)
+`swing_trade_levels` reports two stop candidates from the latest completed daily
+candle — an `ATR(14)`-multiple stop and a swing-low (lowest low over `N` bars) stop —
+each with risk-per-share and R-multiple targets (`1R`/`2R`/`3R`). This is deterministic
+price/ATR arithmetic; it does not size positions or constitute advice.
 
 ## Ratings mapping (TradingView-style blocks)
 

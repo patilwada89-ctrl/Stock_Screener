@@ -25,3 +25,18 @@ RISK_SORT_ORDER = {
     "Watch": 1,
     "OK": 2,
 }
+
+# Production Score weighting: four equal factor families (Momentum / Trend /
+# Volume / Volatility), each contributing 25%. The Momentum family bundles four
+# collinear oscillator signals that share its 25% (6.25% each) so momentum is not
+# quadruple-counted relative to the single-signal families. Weights sum to 1.0
+# and every component is in [-1, 1], so the weighted sum is already in [-1, 1].
+PRODUCTION_COMPONENT_WEIGHTS = {
+    "RSI14_State": 1 / 16,
+    "RSI_Accel": 1 / 16,
+    "MACD_Hist_Sign": 1 / 16,
+    "MACD_Hist_Accel": 1 / 16,
+    "Price_vs_EMA20": 1 / 4,
+    "Volume_Confirm": 1 / 4,
+    "Volatility_Expansion": 1 / 4,
+}

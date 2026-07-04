@@ -2,8 +2,10 @@
 
 A Streamlit app for snapshot-only technical analysis with three tabs:
 - `Portfolio`: long-term health tracking (`Health Score`)
-- `Swing`: momentum screening (`Production Score`) with `Action Board` and `Screener Table`
-- `Stock Details`: deep-dive for the currently selected stock from Portfolio/Swing
+- `Swing`: momentum screening (`Production Score`) — a TradingView-style funnel of
+  ranked pick cards (rating gauge + trade levels) over a color-coded screener table
+- `Stock Details`: deep-dive for the currently selected stock from Portfolio/Swing,
+  including a Trade Levels panel (ATR and swing-low stops with R-multiple targets)
 
 ## Context Pack (Read First)
 
