@@ -89,7 +89,7 @@ def _state_color(status: dict) -> str:
 
 
 def _csv_timestamp_label(path: Path) -> str:
-    """"Created: YYYY-MM-DD HH:MM:SS" from a CSV's mtime, or "" if it doesn't exist yet."""
+    """ "Created: YYYY-MM-DD HH:MM:SS" from a CSV's mtime, or "" if it doesn't exist yet."""
     if not path.exists():
         return ""
     ts = datetime.fromtimestamp(path.stat().st_mtime)
@@ -1336,8 +1336,8 @@ def _poll_swing(_n):
     return (
         results,
         status_alert,
-        running,         # disable Run while running
-        not running,     # disable Stop while NOT running
+        running,  # disable Run while running
+        not running,  # disable Stop while NOT running
         last_run,
     )
 

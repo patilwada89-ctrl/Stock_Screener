@@ -18,7 +18,7 @@ _UNIVERSE_COLUMNS = ["Name", "Region", "SignalTicker", "TradeTicker_DE", "Benchm
 
 
 def _region_from_isin(isin: object) -> str:
-    """"US" for an ISIN starting with the US country code, else "EU" (the app's only two regions)."""
+    """ "US" for an ISIN starting with the US country code, else "EU" (the app's only two regions)."""
     return "US" if str(isin or "").strip().upper().startswith("US") else "EU"
 
 

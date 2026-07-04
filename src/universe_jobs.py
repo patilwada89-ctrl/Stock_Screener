@@ -290,7 +290,7 @@ def _run_screen(cfg: fu.Config, input_csv: str | Path) -> None:
             )
 
         df = fu.fetch_fundamentals(df, cfg, progress=fund_progress, should_stop=should_stop)
-        
+
         if getattr(cfg, "universe_fundamentals_out_path", None):
             fund_out = fu.export(df, cfg, out_path=cfg.universe_fundamentals_out_path)
             _log(cfg, SCREEN, f"Saved full fundamentals universe to {fund_out}")
@@ -401,8 +401,11 @@ def _run_swing_job(
 
         _log(cfg, SWING, "Starting swing screener…")
         result = compute_fn(
-            active_path, buy_threshold, sell_threshold,
-            should_stop=should_stop, progress=progress,
+            active_path,
+            buy_threshold,
+            sell_threshold,
+            should_stop=should_stop,
+            progress=progress,
         )
         # Persist the result dict so the polling callback can render it.
         out = swing_result_path(cfg)
