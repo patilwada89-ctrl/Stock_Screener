@@ -8,6 +8,8 @@ from typing import Any
 
 @dataclass
 class RuleTrace:
+    """One pass/fail hard-filter rule (e.g. a weekly EMA gating condition) with its evaluated value."""
+
     name: str
     passed: bool
     value: str
@@ -15,6 +17,8 @@ class RuleTrace:
 
 @dataclass
 class ComponentTrace:
+    """One weighted score component: its +1/0/-1 ``signal``, the underlying value, and its weight."""
+
     name: str
     signal: int
     value: str
@@ -23,6 +27,12 @@ class ComponentTrace:
 
 @dataclass
 class DecisionTrace:
+    """Full auditable record of a Buy/Sell/Hold decision: rules, weighted components, and notes.
+
+    Built by ``src.signals.build_swing_decision_trace`` and rendered by the
+    Stock Details "why" panel so every decision is traceable back to its inputs.
+    """
+
     name: str
     signal_ticker: str
     benchmark: str
@@ -41,4 +51,5 @@ class DecisionTrace:
     debug: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Recursively convert this trace (and its nested rule/component traces) to plain dicts."""
         return asdict(self)

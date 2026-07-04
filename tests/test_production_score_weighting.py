@@ -36,9 +36,9 @@ def test_each_family_carries_one_quarter():
     ) == pytest.approx(0.25)
     assert production_score_from_components(_components(Price_vs_EMA20=1)) == pytest.approx(0.25)
     assert production_score_from_components(_components(Volume_Confirm=1)) == pytest.approx(0.25)
-    assert production_score_from_components(
-        _components(Volatility_Expansion=1)
-    ) == pytest.approx(0.25)
+    assert production_score_from_components(_components(Volatility_Expansion=1)) == pytest.approx(
+        0.25
+    )
 
 
 def test_single_momentum_signal_is_one_sixteenth():

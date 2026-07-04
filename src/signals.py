@@ -13,6 +13,7 @@ from src.indicators import atr, atr_percent, ema, macd_hist, relative_strength, 
 
 
 def classify_monthly_regime(close_t: float, ema20_t: float, ema20_t_3: float) -> str:
+    """Bull/Bear/Neutral monthly regime from price vs. EMA20 and its 3-month slope."""
     if pd.isna(close_t) or pd.isna(ema20_t) or pd.isna(ema20_t_3):
         return "Neutral"
     if close_t > ema20_t and ema20_t > ema20_t_3:
@@ -23,6 +24,7 @@ def classify_monthly_regime(close_t: float, ema20_t: float, ema20_t_3: float) ->
 
 
 def classify_weekly_alignment(ema20_t: float, ema50_t: float, ema200_t: float) -> str:
+    """Strong/Weak/Broken weekly EMA stack: Strong = 20>50>200, Broken = 20<50."""
     if pd.isna(ema20_t) or pd.isna(ema50_t) or pd.isna(ema200_t):
         return "Broken"
     if ema20_t > ema50_t and ema50_t > ema200_t:
@@ -35,6 +37,7 @@ def classify_weekly_alignment(ema20_t: float, ema50_t: float, ema200_t: float) -
 
 
 def classify_weekly_momentum(rsi_t: float, rsi_t_3: float) -> str:
+    """Strengthening/Weakening/Neutral weekly RSI momentum vs. its value 3 weeks ago."""
     if pd.isna(rsi_t) or pd.isna(rsi_t_3):
         return "Neutral"
     if rsi_t > 50 and rsi_t > rsi_t_3:
@@ -45,6 +48,8 @@ def classify_weekly_momentum(rsi_t: float, rsi_t_3: float) -> str:
 
 
 def classify_risk_flag(monthly_regime: str, weekly_alignment: str, rs_rising: bool) -> str:
+    """Breakdown/OK/Watch risk flag for the Portfolio tab, combining monthly regime,
+    weekly EMA alignment, and relative-strength direction."""
     rs_falling = not rs_rising
     if monthly_regime == "Bear" or (weekly_alignment == "Broken" and rs_falling):
         return "Breakdown"
@@ -56,6 +61,7 @@ def classify_risk_flag(monthly_regime: str, weekly_alignment: str, rs_rising: bo
 
 
 def normalize_score(values: list[float]) -> float:
+    """Mean of ``values`` clamped to [-1, 1]; 0.0 for an empty list."""
     if not values:
         return 0.0
     score = float(np.mean(values))
@@ -79,6 +85,12 @@ def production_score_from_components(components: dict[str, int]) -> float:
 def weekly_filter_frame(
     stock_weekly_close: pd.Series, bench_weekly_close: pd.Series
 ) -> pd.DataFrame:
+    """Build the weekly EMA/relative-strength frame backing the Swing hard filter.
+
+    Per week: EMA20/50/200, RS EMA20 vs. the benchmark, and the three boolean
+    gating rules (EMA alignment, EMA20 rising, RS EMA20 rising), combined into
+    ``qualified``. Returns an empty frame if the two series don't overlap.
+    """
     aligned = pd.concat(
         [stock_weekly_close.rename("stock"), bench_weekly_close.rename("bench")],
         axis=1,
@@ -108,6 +120,7 @@ def weekly_filter_frame(
 def evaluate_weekly_hard_filter(
     stock_weekly_close: pd.Series, bench_weekly_close: pd.Series
 ) -> dict[str, Any]:
+    """Latest-week pass/fail of the Swing hard filter, plus the full ``filter_frame`` for charting."""
     wf = weekly_filter_frame(stock_weekly_close, bench_weekly_close)
     if wf.empty:
         return {
@@ -128,6 +141,7 @@ def evaluate_weekly_hard_filter(
 
 
 def _component_buy_neutral_sell(value: float, buy_threshold: float, sell_threshold: float) -> int:
+    """Map a value to +1/0/-1 by whether it's above ``buy_threshold``, below ``sell_threshold``, or between."""
     if pd.isna(value):
         return 0
     if value > buy_threshold:
@@ -138,6 +152,7 @@ def _component_buy_neutral_sell(value: float, buy_threshold: float, sell_thresho
 
 
 def _component_acceleration(current: float, past: float) -> int:
+    """+1 if ``current`` > ``past``, -1 if less, 0 if equal or either is NaN."""
     if pd.isna(current) or pd.isna(past):
         return 0
     if current > past:
@@ -148,6 +163,13 @@ def _component_acceleration(current: float, past: float) -> int:
 
 
 def daily_components(daily_df: pd.DataFrame) -> dict[str, Any]:
+    """Compute the seven daily component signals and Production Score for the latest completed bar.
+
+    Components: RSI14 state/acceleration, MACD histogram sign/acceleration,
+    price-vs-EMA20, volume confirmation, and ATR14% volatility expansion (each
+    in {-1, 0, 1}). Also classifies the setup as Breakout/Pullback/Trend.
+    Returns ``{"status": "Insufficient daily history (<30 bars)"}`` if too short.
+    """
     if len(daily_df) < 30:
         return {"status": "Insufficient daily history (<30 bars)"}
 
@@ -269,6 +291,11 @@ def daily_components(daily_df: pd.DataFrame) -> dict[str, Any]:
 def classify_recently_lost(
     filter_frame: pd.DataFrame, lookback_weeks: int = config.WEEKLY_RECENTLY_LOST_LOOKBACK
 ) -> tuple[bool, str]:
+    """Detect a stock that qualified within the last ``lookback_weeks`` but no longer does.
+
+    Returns ``(recently_lost, last_qualified_week)`` — the date string is empty
+    when the stock is currently qualified or never qualified in the window.
+    """
     if filter_frame.empty or len(filter_frame) < 2:
         return False, ""
     currently_qualified = bool(filter_frame["qualified"].iloc[-1])
@@ -283,6 +310,7 @@ def classify_recently_lost(
 
 
 def failed_weekly_rules_text(filter_frame: pd.DataFrame) -> str:
+    """Human-readable list of the weekly hard-filter rules failing in the latest week ("-" if none)."""
     if filter_frame.empty:
         return "No weekly signal data"
     latest = filter_frame.iloc[-1]
@@ -305,6 +333,12 @@ def evaluate_swing_stock(
     bench_weekly: pd.DataFrame,
     stock_status: str,
 ) -> dict[str, Any]:
+    """Full Swing screener row for one stock: weekly hard filter, then (if qualified) daily score.
+
+    Short-circuits with ``Status`` describing the failure point (bad fetch,
+    failed weekly filter, insufficient daily history) so the Swing table can
+    show why a stock was excluded rather than just omitting it.
+    """
     result: dict[str, Any] = {
         "Name": meta["Name"],
         "Region": meta["Region"],
@@ -363,6 +397,7 @@ def _health_score(
     rs_rising: bool,
     weekly_momentum_state: str,
 ) -> float:
+    """Portfolio Health Score: mean of four {-1,0,1}-mapped regime/alignment/RS/momentum factors."""
     regime_map = {"Bull": 1, "Neutral": 0, "Bear": -1}
     align_map = {"Strong": 1, "Weak": 0, "Broken": -1}
     momentum_map = {"Strengthening": 1, "Neutral": 0, "Weakening": -1}
@@ -378,6 +413,7 @@ def _health_score(
 
 
 def _decision_from_score(score: float, buy_threshold: float, sell_threshold: float) -> str:
+    """Buy/Sell/Hold from a score and its two thresholds; NaN scores default to Hold."""
     if pd.isna(score):
         return "Hold"
     if score >= buy_threshold:
@@ -390,12 +426,14 @@ def _decision_from_score(score: float, buy_threshold: float, sell_threshold: flo
 def decision_from_health_score(
     health_score: float, buy_threshold: float, sell_threshold: float
 ) -> str:
+    """Buy/Sell/Hold for the Portfolio tab, based on Health Score."""
     return _decision_from_score(health_score, buy_threshold, sell_threshold)
 
 
 def decision_from_production_score(
     production_score: float, buy_threshold: float, sell_threshold: float
 ) -> str:
+    """Buy/Sell/Hold for the Swing tab, based on Production Score."""
     return _decision_from_score(production_score, buy_threshold, sell_threshold)
 
 
@@ -404,6 +442,7 @@ def _swing_risk_flag(
     failed_rules: list[str],
     decision: str,
 ) -> tuple[str, str]:
+    """Breakdown/Watch/OK risk flag and human-readable reason for a swing decision trace."""
     if not weekly_qualified:
         reason = "Weekly hard filter failed"
         if failed_rules:
@@ -423,6 +462,7 @@ def swing_decision_snapshot(
     buy_threshold: float,
     sell_threshold: float,
 ) -> dict[str, Any]:
+    """Plain-dict view of ``build_swing_decision_trace`` for the Stock Details "why" panel."""
     trace = build_swing_decision_trace(
         stock_daily=stock_daily,
         stock_weekly=stock_weekly,
@@ -462,6 +502,12 @@ def build_swing_decision_trace(
     benchmark: str,
     name: str,
 ) -> DecisionTrace | None:
+    """Build the full auditable ``DecisionTrace`` (rules, weighted components, notes) for one stock.
+
+    This is the single source of truth behind both ``swing_decision_snapshot``
+    and the Stock Details "why" breakdown. Returns ``None`` if there isn't
+    enough weekly/daily history to evaluate.
+    """
     if stock_daily.empty or stock_weekly.empty or bench_weekly.empty:
         return None
     if "Close" not in stock_weekly.columns or "Close" not in bench_weekly.columns:
@@ -610,6 +656,11 @@ def swing_lifecycle_frame(
     stock_weekly: pd.DataFrame,
     bench_weekly: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Per-week history of weekly-qualification and daily Production Score, for the lifecycle chart.
+
+    Recomputes ``daily_components`` as of each historical week (expanding daily
+    slice), so the chart reflects what the score would have shown at that time.
+    """
     empty = pd.DataFrame(
         columns=[
             "Qualified",
@@ -672,6 +723,7 @@ def swing_technical_snapshot(
     stock_weekly: pd.DataFrame,
     bench_weekly: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Flat Indicator/Value table of the latest weekly + daily raw indicator values, for display."""
     rows: list[dict[str, Any]] = []
     empty = pd.DataFrame(columns=["Indicator", "Value"])
 
@@ -769,6 +821,7 @@ def _build_stop_row(
     stop: float,
     r_multiples: tuple[float, ...],
 ) -> dict[str, Any]:
+    """One stop-loss candidate's risk/share, risk%, and R-multiple targets (NaN if stop >= entry)."""
     risk = entry - stop
     valid = pd.notna(stop) and pd.notna(entry) and risk > 0
     row: dict[str, Any] = {
@@ -835,6 +888,11 @@ def portfolio_lifecycle_frame(
     stock_monthly: pd.DataFrame,
     bench_weekly: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Per-week history of monthly regime, weekly alignment/RS/momentum, risk flag, and Health Score.
+
+    Backs the Portfolio tab's lifecycle chart; monthly regime is forward-filled
+    onto the weekly index since it only changes once a month.
+    """
     empty = pd.DataFrame(
         columns=[
             "1M Regime",
@@ -934,6 +992,11 @@ def evaluate_portfolio_stock(
     bench_weekly: pd.DataFrame,
     stock_status: str,
 ) -> dict[str, Any]:
+    """Full Portfolio screener row for one stock: latest regime/alignment/RS/momentum, risk, and Health Score.
+
+    Unlike Swing, there is no hard filter here — every stock gets a row with a
+    default "Neutral"/"Broken"/"Watch" state if ``stock_status`` isn't "OK".
+    """
     result: dict[str, Any] = {
         "Name": meta["Name"],
         "Region": meta["Region"],
@@ -1003,6 +1066,7 @@ def evaluate_portfolio_stock(
 
 
 def rank_qualified(qualified_df: pd.DataFrame) -> pd.DataFrame:
+    """Sort qualified Swing candidates by Production Score descending and assign ``ProductionRank``."""
     if qualified_df.empty:
         return qualified_df
     out = qualified_df.copy()
@@ -1012,6 +1076,12 @@ def rank_qualified(qualified_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_custom_weights(qualified_df: pd.DataFrame, weights: dict[str, float]) -> pd.DataFrame:
+    """Re-rank qualified stocks under user-supplied component weights (normalized to sum to 1).
+
+    Adds ``CustomScore``, ``CustomRank``, and ``RankDelta`` (positive = moved
+    up vs. the default Production Score ranking). All-zero weights yield a
+    flat ``CustomScore`` of 0.0 rather than dividing by zero.
+    """
     if qualified_df.empty:
         return qualified_df
 
@@ -1044,6 +1114,7 @@ def apply_custom_weights(qualified_df: pd.DataFrame, weights: dict[str, float]) 
 
 
 def sort_portfolio_for_risk(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort the Portfolio table by risk severity (``config.RISK_SORT_ORDER``), then Health Score ascending."""
     if df.empty:
         return df
     out = df.copy()

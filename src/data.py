@@ -14,6 +14,8 @@ from src import config
 
 @dataclass
 class TickerData:
+    """Daily/weekly/monthly OHLCV frames for one ticker plus a fetch ``status``."""
+
     ticker: str
     daily: pd.DataFrame
     weekly: pd.DataFrame
@@ -22,12 +24,18 @@ class TickerData:
 
 
 def _strip_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip whitespace from column labels (defends against messy CSV exports)."""
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
 
 def _read_csv_autodetect(source: str | Path | BinaryIO) -> pd.DataFrame:
+    """Read a CSV from a path or file-like object, sniffing the delimiter.
+
+    Handles Dash upload buffers (bytes, BOM-prefixed) the same way as plain
+    file paths so callers don't need to special-case the upload source.
+    """
     if hasattr(source, "read"):
         raw = source.read()
         if hasattr(source, "seek"):
@@ -41,6 +49,11 @@ def _read_csv_autodetect(source: str | Path | BinaryIO) -> pd.DataFrame:
 
 
 def _normalize_region(raw_region: str, benchmark: str) -> str:
+    """Map free-form region labels (ROW, EMEA, USA, ...) to the canonical ``EU``/``US``.
+
+    ``ROW``/``WORLD``/``GLOBAL`` are disambiguated using the row's benchmark:
+    US-benchmarked rows become ``US``, everything else defaults to ``EU``.
+    """
     region = str(raw_region or "").upper().strip()
     bench = str(benchmark or "").upper().strip()
 
@@ -61,6 +74,12 @@ def _normalize_region(raw_region: str, benchmark: str) -> str:
 
 
 def load_universe_csv(source: str | Path | BinaryIO) -> pd.DataFrame:
+    """Load, validate, and normalize an uploaded/screened universe CSV.
+
+    Enforces ``config.REQUIRED_CSV_COLUMNS``, fills optional columns, normalizes
+    ``Region`` to EU/US, drops rows with no ``SignalTicker``, and resolves each
+    row's benchmark. Raises ``ValueError`` on missing or invalid columns.
+    """
     df = _read_csv_autodetect(source)
     df = _strip_columns(df)
 
@@ -92,6 +111,7 @@ def load_universe_csv(source: str | Path | BinaryIO) -> pd.DataFrame:
 
 
 def resolve_benchmark(row: pd.Series) -> str:
+    """Return the row's explicit ``Benchmark`` override, else the region default."""
     override = str(row.get("Benchmark", "") or "").strip()
     if override:
         return override
@@ -100,6 +120,11 @@ def resolve_benchmark(row: pd.Series) -> str:
 
 
 def download_history(ticker: str) -> pd.DataFrame:
+    """Download daily OHLCV history for ``ticker`` via yfinance.
+
+    Prefers ``Adj Close`` for the ``Close`` column when available. Returns an
+    empty frame (never raises) if yfinance is unavailable or the ticker has no data.
+    """
     try:
         import yfinance as yf
     except Exception:
@@ -140,6 +165,11 @@ def _drop_incomplete_last_period(
     resampled: pd.DataFrame,
     source_last_timestamp: pd.Timestamp,
 ) -> pd.DataFrame:
+    """Drop the trailing resampled bar if the source data doesn't yet cover its full period.
+
+    Prevents an in-progress week/month from being scored as if it were a
+    completed candle.
+    """
     if resampled.empty:
         return resampled
 
@@ -150,6 +180,7 @@ def _drop_incomplete_last_period(
 
 
 def to_weekly(df_daily: pd.DataFrame) -> pd.DataFrame:
+    """Resample daily OHLCV to Friday-ending weekly bars, dropping any incomplete final week."""
     if df_daily.empty:
         return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
@@ -168,6 +199,7 @@ def to_weekly(df_daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def to_monthly(df_daily: pd.DataFrame) -> pd.DataFrame:
+    """Resample daily OHLCV to calendar-month-end bars, dropping any incomplete final month."""
     if df_daily.empty:
         return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
@@ -186,6 +218,12 @@ def to_monthly(df_daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_ticker_data(ticker: str) -> TickerData:
+    """Download and resample one ticker's history, gating on minimum bar counts.
+
+    Requires >=210 weekly bars and >=24 monthly bars (the longest lookbacks
+    used by the scoring rules); short-circuits with a descriptive ``status``
+    otherwise so callers can surface why a ticker was skipped.
+    """
     daily = download_history(ticker)
     if daily.empty:
         return TickerData(

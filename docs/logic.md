@@ -13,6 +13,19 @@
 
 Health Score is normalized to `[-1, +1]`.
 
+## Fundamental Universe Screening
+
+When downloading the Frankfurt/Xetra universe, fundamental filters are applied to produce the swing-ready universe. This ensures all screened stocks have strong turnover, positive current ratios, and low debt-to-equity ratios.
+
+Configured thresholds (in `config.yaml`):
+- `min_price`: 5.0
+- `min_turnover`: 1,000,000 (calculated as `price` * `averageVolume`)
+- `min_current_ratio`: 1.0
+- `max_debt_to_equity`: 150.0
+- `min_market_cap`: 300,000,000
+
+The original complete dataset with fundamentals is saved to `universe_fundamentals.csv`, and the post-screened data goes to `universe_screened.csv`.
+
 ## Swing logic
 
 ### Weekly hard filter (gate)

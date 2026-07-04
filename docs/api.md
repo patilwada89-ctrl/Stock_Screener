@@ -52,14 +52,22 @@ Indicator primitives all accept pandas Series and return Series unless noted:
 
 ## `src/ui_helpers.py`
 
-Pure display builders (no Streamlit import); `app.py` renders the returned objects/markup.
-- Charts: `prepare_lifecycle_frame`, `lifecycle_score_chart`, `decision_change_points`,
-  `clean_display_df`
-- TradingView-style swing view (return HTML/SVG strings):
-  - `rating_gauge_svg(score)` — semicircular gauge, needle maps score in `[-1, 1]`
-  - `funnel_strip_html(universe, qualified, buy, watch, avoid)`
-  - `swing_pick_card_html(*, ticker, name, region, decision, prod_score, tv_rating, setup, risk_flag, entry, stop, target_2r, featured)`
-  - `screener_heat_table_html(rows)` — color-coded display-only screener table
+- `prepare_lifecycle_frame(lifecycle, score_col, decision_col, window=104)` — pure tidy
+  for lifecycle charts (framework-agnostic).
+
+## `src/plotly_charts.py`
+
+- `rating_gauge_figure(score)` — TradingView-style gauge (needle maps score in `[-1, 1]`).
+- `lifecycle_score_figure(dates, scores, buy, sell, score_name)` — score line + thresholds.
+
+## Universe workflow
+
+- `src/frankfurt_universe.py` — reused pipeline: `build_universe`, `resolve_tickers`,
+  `fetch_fundamentals`, `apply_filter`, `export(df, cfg, out_path=None)`, plus `Config`.
+- `src/universe_config.py` — `load_universe_config(path=None) -> Config` from `config.yaml`.
+- `src/universe_jobs.py` — `start_download_job(cfg)`, `start_screen_job(cfg, input_csv)`,
+  `job_status(cfg, job)` (background threads + `data/job_status.json`).
+- `src/universe_adapter.py` — `screened_csv_to_universe(path)` → app universe schema.
 
 ## `src/decision_trace.py`
 

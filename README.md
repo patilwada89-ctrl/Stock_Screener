@@ -1,6 +1,7 @@
-# Snapshot TA Screener (Streamlit)
+# Snapshot TA Screener (Dash + Plotly)
 
-A Streamlit app for snapshot-only technical analysis with three tabs:
+A Dash + Plotly app for snapshot-only technical analysis with four tabs:
+- `Universe`: two-step Frankfurt/Xetra download → screen workflow (background jobs, config-driven)
 - `Portfolio`: long-term health tracking (`Health Score`)
 - `Swing`: momentum screening (`Production Score`) — a TradingView-style funnel of
   ranked pick cards (rating gauge + trade levels) over a color-coded screener table
@@ -25,7 +26,7 @@ pip install -r requirements-dev.txt
 ## Commands
 
 ```bash
-make dev      # streamlit run app.py
+make dev      # python app.py
 make test     # pytest -q
 make lint     # ruff check .
 make format   # ruff format .
@@ -53,7 +54,10 @@ must remain compatible with both versions.
 
 ## CSV schema
 
-Both `portfolio.csv` and `watchlist.csv` use the same schema.
+Portfolio, Swing, and Stock Details all run against a single **active universe**:
+the most recently screened CSV from the Universe tab if one exists, else the
+bundled example (`examples/xfra_swing_trading_universe.csv`). Any CSV loaded
+this way must follow the same schema.
 
 Required columns:
 - `Name`
@@ -88,16 +92,16 @@ Examples:
 
 ## Stock Details workflow
 
-1. Click a row in Portfolio or Swing.
-2. Open `Stock Details` tab.
-3. Use `Prev` / `Next` to step through the active ranked list.
+1. Select a row in the Portfolio or Swing table, or click a pick card's
+   `Analyze →` button on the Swing tab.
+2. Open the `Stock Details` tab — it renders for whichever stock was last selected.
 
 `Stock Details` includes:
 - Swing decision card (Production Score, Decision, qualification, setup, risk + reason)
+- Trade levels (ATR and swing-low stops with risk-per-share and R-multiple targets)
 - TradingView-style ratings blocks (Oscillators / Summary / Moving Averages)
-- Swing lifecycle chart with threshold lines and decision-change markers
 - Why-this-decision breakdown (weekly rule checks + daily component signals)
-- Latest indicators (concise table + advanced expander)
+- Swing lifecycle chart (Production Score history overlaid with weekly price)
 
 ## Benchmarks
 
@@ -106,14 +110,13 @@ Examples:
 
 Configure in `src/config.py`.
 
-## Debug mode
+## Debugging
 
-Use sidebar `Debug mode` to inspect:
-- selected `DecisionTrace` JSON
-- date dtype/min/max diagnostics
-- intermediate values used by rules
-
-See `docs/debugging.md`.
+There is no separate debug-mode UI toggle. The "Why this decision" panel on
+`Stock Details` surfaces the weekly-rule and daily-component values driving a
+decision directly; `DecisionTrace.debug` carries additional intermediate
+values (weekly filter tail, raw daily values) for anyone inspecting results
+programmatically. See `docs/debugging.md` for common data issues.
 
 ## Tests
 

@@ -20,6 +20,7 @@ from src.indicators import (
 
 
 def rating_label(score: float) -> str:
+    """TradingView-style label (Strong Buy/Buy/Neutral/Sell/Strong Sell) for a [-1, 1] score."""
     if pd.isna(score):
         return "Neutral"
     if score >= 0.6:
@@ -34,6 +35,7 @@ def rating_label(score: float) -> str:
 
 
 def _signal_from_value(value: float, buy_if_above: float = 0.0, sell_if_below: float = 0.0) -> int:
+    """+1/0/-1 by whether ``value`` is above/below the given thresholds."""
     if pd.isna(value):
         return 0
     if value > buy_if_above:
@@ -44,6 +46,7 @@ def _signal_from_value(value: float, buy_if_above: float = 0.0, sell_if_below: f
 
 
 def _rating_block(signals: list[int]) -> dict[str, Any]:
+    """Aggregate a list of +1/0/-1 signals into a mean ``score``, ``label``, and buy/neutral/sell counts."""
     if not signals:
         return {"score": 0.0, "label": "Neutral", "buy": 0, "neutral": 0, "sell": 0}
     arr = np.array(signals, dtype=float)
@@ -58,12 +61,14 @@ def _rating_block(signals: list[int]) -> dict[str, Any]:
 
 
 def _latest(series: pd.Series) -> float:
+    """Last value of ``series`` as a float, or NaN if the series is empty."""
     if series.empty:
         return np.nan
     return float(series.iloc[-1])
 
 
 def oscillator_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
+    """TradingView-style oscillator rating block (RSI, Momentum, AO, CCI, Stochastic, MACD hist)."""
     close = daily_df["Close"]
     high = daily_df.get("High", close)
     low = daily_df.get("Low", close)
@@ -120,6 +125,7 @@ def oscillator_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
 
 
 def moving_average_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
+    """TradingView-style moving-average rating block (price vs. EMA/SMA 20/50/200)."""
     close = daily_df["Close"]
 
     ema20 = ema(close, 20)
@@ -138,6 +144,7 @@ def moving_average_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
     sma200_v = _latest(sma200)
 
     def above_ma(ma_val: float) -> int:
+        """+1/-1/0 for close above/below/equal to a single moving-average value."""
         if pd.isna(close_v) or pd.isna(ma_val):
             return 0
         if close_v > ma_val:
@@ -177,6 +184,11 @@ def moving_average_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
 
 
 def technical_ratings(daily_df: pd.DataFrame) -> dict[str, Any]:
+    """Combine oscillator + moving-average blocks into the full TradingView-style rating set.
+
+    ``summary`` is the rating over all 12 underlying oscillator + MA signals
+    combined. Requires >=40 daily bars; otherwise returns neutral blocks.
+    """
     if daily_df.empty or len(daily_df) < 40:
         return {
             "status": "Insufficient daily data for ratings",
@@ -205,6 +217,7 @@ def technical_ratings(daily_df: pd.DataFrame) -> dict[str, Any]:
 
 
 def screener_snapshot(daily_df: pd.DataFrame) -> dict[str, Any]:
+    """Flatten ``technical_ratings`` into the column-name keys used by the Swing screener table."""
     ratings = technical_ratings(daily_df)
     if ratings.get("status") != "OK":
         return {
