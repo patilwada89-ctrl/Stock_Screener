@@ -12,6 +12,7 @@ except Exception:  # pragma: no cover - optional fallback in runtime env
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
+    """Exponential moving average; uses ``pandas_ta`` when installed, else a pandas fallback."""
     if pta is not None:
         out = pta.ema(series, length=length)
         if out is not None:
@@ -20,6 +21,7 @@ def ema(series: pd.Series, length: int) -> pd.Series:
 
 
 def sma(series: pd.Series, length: int) -> pd.Series:
+    """Simple moving average; uses ``pandas_ta`` when installed, else a pandas fallback."""
     if pta is not None:
         out = pta.sma(series, length=length)
         if out is not None:
@@ -28,6 +30,7 @@ def sma(series: pd.Series, length: int) -> pd.Series:
 
 
 def rsi(series: pd.Series, length: int = 14) -> pd.Series:
+    """Wilder's RSI, fallback implementation fills undefined leading values with neutral 50.0."""
     if pta is not None:
         out = pta.rsi(series, length=length)
         if out is not None:
@@ -45,6 +48,7 @@ def rsi(series: pd.Series, length: int = 14) -> pd.Series:
 
 
 def macd_hist(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
+    """MACD histogram (MACD line minus its signal line)."""
     if pta is not None:
         out = pta.macd(series, fast=fast, slow=slow, signal=signal)
         if out is not None and not out.empty:
@@ -58,6 +62,7 @@ def macd_hist(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
 
 
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
+    """Average True Range (Wilder smoothing), used for stop/target sizing."""
     if pta is not None:
         out = pta.atr(high=high, low=low, close=close, length=length)
         if out is not None:
@@ -76,20 +81,24 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
 
 
 def atr_percent(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
+    """ATR expressed as a fraction of price, so volatility is comparable across tickers."""
     atr_val = atr(high, low, close, length=length)
     return atr_val / close.replace(0, np.nan)
 
 
 def momentum_pct(series: pd.Series, length: int = 10) -> pd.Series:
+    """Percent change over ``length`` bars."""
     return series.pct_change(length)
 
 
 def awesome_oscillator(high: pd.Series, low: pd.Series, fast: int = 5, slow: int = 34) -> pd.Series:
+    """Bill Williams' Awesome Oscillator: fast SMA minus slow SMA of the median price."""
     median_price = (high + low) / 2.0
     return sma(median_price, fast) - sma(median_price, slow)
 
 
 def cci(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 20) -> pd.Series:
+    """Commodity Channel Index: typical-price deviation from its SMA, scaled by mean deviation."""
     tp = (high + low + close) / 3.0
     tp_sma = sma(tp, length)
     mean_dev = (tp - tp_sma).abs().rolling(length, min_periods=length).mean()
@@ -105,6 +114,7 @@ def stochastic_oscillator(
     smooth_k: int = 3,
     d_length: int = 3,
 ) -> tuple[pd.Series, pd.Series]:
+    """Slow stochastic oscillator; returns the smoothed ``%K`` and ``%D`` lines."""
     lowest_low = low.rolling(k_length, min_periods=k_length).min()
     highest_high = high.rolling(k_length, min_periods=k_length).max()
     range_ = (highest_high - lowest_low).replace(0, np.nan)
@@ -115,6 +125,7 @@ def stochastic_oscillator(
 
 
 def relative_strength(stock_close: pd.Series, benchmark_close: pd.Series) -> pd.Series:
+    """Stock/benchmark price ratio on their overlapping dates (empty series if no overlap)."""
     aligned = pd.concat([stock_close, benchmark_close], axis=1, join="inner").dropna()
     if aligned.empty:
         return pd.Series(dtype=float)
@@ -123,6 +134,7 @@ def relative_strength(stock_close: pd.Series, benchmark_close: pd.Series) -> pd.
 
 
 def slope_positive(series: pd.Series, lookback: int = 3) -> bool:
+    """True if the series' latest value exceeds its value ``lookback`` bars ago."""
     if len(series.dropna()) <= lookback:
         return False
     return bool(series.iloc[-1] > series.iloc[-(lookback + 1)])

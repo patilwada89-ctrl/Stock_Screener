@@ -4,3 +4,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 .venv_py39_backup/
+
+# Runtime data dir: downloaded CSVs, caches, screened outputs, job status
+data/
+*.part
+
+# Personal/local Claude Code settings (shared config, if any, goes in .claude/settings.json)
+.claude/settings.local.json

@@ -1,11 +1,11 @@
 # AGENTS Guide
 
-Stock_Screener is a Streamlit snapshot-only technical-analysis app with three user flows: Portfolio health tracking, Swing momentum screening, and Stock Details diagnostics. The product intent is deterministic snapshot evaluation using previous completed candles and region-native benchmarks; no forecasting, no prediction targets, and no historical journaling as a required feature.
+Stock_Screener is a Dash + Plotly snapshot-only technical-analysis app with a Universe builder (Frankfurt/Xetra download → screen) plus three analysis flows: Portfolio health tracking, Swing momentum screening, and Stock Details diagnostics. The product intent is deterministic snapshot evaluation using previous completed candles and region-native benchmarks; no forecasting, no prediction targets, and no historical journaling as a required feature.
 
 ## Architecture Map
 
 - `/Users/ashish/vscode/Stock_Screener/app.py`
-  - Streamlit-only UI layer.
+  - Dash + Plotly UI layer (tabs, callbacks, `dcc.Store` state, `dcc.Graph`/`DataTable`).
   - Page state/session handling, table rendering, controls, chart composition.
   - Calls pure computation functions from `src/`.
 - `/Users/ashish/vscode/Stock_Screener/src/`
@@ -15,7 +15,10 @@ Stock_Screener is a Streamlit snapshot-only technical-analysis app with three us
   - `signals.py`: rule logic, scoring, lifecycle outputs, decision traces.
   - `ratings.py`: TradingView-style rating computations.
   - `config.py`: constants.
-  - **No Streamlit imports in `src/`.**
+  - `frankfurt_universe.py`: Frankfurt/Xetra universe pipeline (download/resolve/screen).
+  - `universe_config.py`: loads `config.yaml`. `universe_jobs.py`: background jobs + status file.
+  - `universe_adapter.py`: screened CSV → app universe. `plotly_charts.py`: Plotly figures.
+  - **No UI-framework imports (Dash/Plotly) in `src/`.**
 - `/Users/ashish/vscode/Stock_Screener/tests/`
   - Offline deterministic unit tests.
   - Network calls are excluded from default test runs.
@@ -25,7 +28,7 @@ Stock_Screener is a Streamlit snapshot-only technical-analysis app with three us
 - Snapshot-only TA: compute from last completed candle per timeframe.
 - No forecasting/prediction logic.
 - Keep `src/` functions pure and testable.
-- Never import `streamlit` in `src/`; UI belongs in `app.py`.
+- Never import a UI framework (Dash/Plotly) in `src/`; UI belongs in `app.py`.
 - Preserve existing behavior unless a change is explicitly requested or needed for reproducibility/test stability.
 
 ## Runbook

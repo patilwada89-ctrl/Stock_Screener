@@ -2,7 +2,7 @@
 
 ## Purpose
 
-- Provide a snapshot-only technical-analysis stock screener in Streamlit.
+- Provide a snapshot-only technical-analysis stock screener in Dash + Plotly.
 - Separate Portfolio health and Swing momentum workflows.
 - Keep scoring deterministic and reproducible from completed candles.
 - Support CSV-based universes with region-aware benchmark handling.
@@ -10,13 +10,13 @@
 
 ## Architecture Summary
 
-- `app.py`: Streamlit UI rendering, controls, session state, chart/table presentation.
+- `app.py`: Dash UI (tabs, callbacks, `dcc.Store` state, Plotly charts/`DataTable`s).
 - `src/`: data normalization, indicators, rule engines, scoring, ratings, trace objects.
 - `tests/`: offline deterministic unit tests.
 
 ## Conventions
 
-- No `streamlit` imports in `src/`.
+- No UI-framework imports (Dash/Plotly) in `src/`.
 - `src/` functions should be pure where possible.
 - DataFrame contracts follow OHLCV naming (`Open`, `High`, `Low`, `Close`, `Volume`).
 - Swing uses `Production Score`; Portfolio uses `Health Score`.

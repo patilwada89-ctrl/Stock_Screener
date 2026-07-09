@@ -1,7 +1,7 @@
 .PHONY: dev test lint format lock
 
 dev:
-	streamlit run app.py
+	python app.py
 
 test:
 	pytest -q

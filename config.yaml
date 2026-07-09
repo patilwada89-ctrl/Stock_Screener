@@ -1,0 +1,33 @@
+# Frankfurt/Xetra universe builder configuration.
+#
+# Read by BOTH the CLI (`python -m src.frankfurt_universe`) and the Dash
+# "Universe" tab, via src/universe_config.py. Scope and thresholds live here
+# only -- the UI intentionally exposes no scope/threshold controls.
+
+# --- where files live ---
+data_dir: ./data
+universe_out_path: ./data/universe_downloaded.csv   # "Download universe" output
+universe_fundamentals_out_path: ./data/universe_fundamentals.csv  # pre-screened universe with fundamentals
+screened_out_path: ./data/universe_screened.csv     # "Screen stocks" output
+
+# --- universe scope ---
+include_xetra: true
+include_frankfurt: true
+frankfurt_scope: us          # us | foreign | all
+us_ticker_mode: us_primary   # us_primary | frankfurt_line | both
+fetch_fundamentals: true
+
+# --- fundamental filter thresholds (null = ignore that gate) ---
+min_market_cap: 300000000    # in the stock's own currency
+max_market_cap: null
+min_price: 5.0
+min_avg_volume: 100000       # shares/day (yfinance averageVolume)
+min_turnover: 1000000        # min (price * avg_volume)
+min_current_ratio: 1.0
+max_debt_to_equity: 150.0
+require_positive_eps: false
+min_trailing_pe: null
+max_trailing_pe: null
+max_price_to_book: null
+excluded_sectors: []
+allowed_sectors: []          # empty = allow all
