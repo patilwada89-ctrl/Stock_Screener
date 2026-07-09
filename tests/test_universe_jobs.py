@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src import frankfurt_universe as fu
 from src import universe_jobs as jobs
@@ -13,10 +15,31 @@ from src import universe_jobs as jobs
 _TERMINAL = ("done", "error", "stopped")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_jobs():
+    """Join and clear any job threads/state a test leaves behind, so the shared
+    module-level registries don't bleed across tests."""
+    yield
+    for job in list(jobs._threads):
+        if job in jobs._cancel:
+            jobs._cancel[job].set()
+    for thread in list(jobs._threads.values()):
+        if thread is not None:
+            thread.join(timeout=2.0)
+    jobs._threads.clear()
+    for event in jobs._cancel.values():
+        event.clear()
+    for handler in [h for h in fu.log.handlers if type(h).__name__ == "_JobLogHandler"]:
+        fu.log.removeHandler(handler)
+
+
 def _cfg(tmp_path):
+    # All output paths land inside tmp_path — otherwise a job would write to the
+    # Config defaults (./data/*), which fail on a fresh CI checkout.
     return fu.Config(
         data_dir=tmp_path,
         universe_out_path=tmp_path / "downloaded.csv",
+        universe_fundamentals_out_path=tmp_path / "fundamentals.csv",
         screened_out_path=tmp_path / "screened.csv",
     )
 
@@ -92,23 +115,30 @@ def test_stop_job_cancels_and_marks_stopped(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     universe = pd.DataFrame({"isin": ["US1"], "mnemonic": ["A"], "source": ["XETR"]})
 
-    def slow_resolve(u, cfg, progress=None, should_stop=None):
-        for _ in range(500):
+    entered = threading.Event()
+
+    def blocking_resolve(u, cfg, progress=None, should_stop=None):
+        # Signal that the job is genuinely in the resolve loop, then spin until
+        # cancellation is requested — it never completes on its own, so the only
+        # terminal state possible is "stopped" (no timing race with completion).
+        entered.set()
+        for _ in range(4000):  # ~20s safety cap; real exit is via cancellation
             if should_stop is not None and should_stop():
                 raise fu.JobCancelled("stopped in test")
-            time.sleep(0.01)
+            time.sleep(0.005)
         return u.assign(yahoo_ticker=["X"] * len(u))
 
     monkeypatch.setattr(fu, "build_universe", lambda cfg, refresh=True, **kw: universe)
-    monkeypatch.setattr(fu, "resolve_tickers", slow_resolve)
+    monkeypatch.setattr(fu, "resolve_tickers", blocking_resolve)
     monkeypatch.setattr(fu, "export", _fake_export)
 
     assert jobs.start_download_job(cfg) is True
-    time.sleep(0.1)  # let it enter the resolve loop
+    assert entered.wait(timeout=3.0)  # deterministically wait until the loop is running
     assert jobs.is_running(jobs.DOWNLOAD) is True
-    jobs.stop_job(cfg, jobs.DOWNLOAD)
 
+    jobs.stop_job(cfg, jobs.DOWNLOAD)
     status = _wait_terminal(cfg, jobs.DOWNLOAD)
+    jobs._threads[jobs.DOWNLOAD].join(timeout=3.0)  # let the thread fully finish before asserting
     assert status["state"] == "stopped"
     assert jobs.is_running(jobs.DOWNLOAD) is False
 
